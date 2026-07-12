@@ -12,6 +12,7 @@ import Dashboard from './pages/Dashboard';
 import Products from './pages/Products';
 import Categories from './pages/Categories';
 import Brands from './pages/Brands';
+import ProductWizard from './pages/ProductWizard';
 import Quotes from './pages/Quotes';
 import Orders from './pages/Orders';
 import Customers from './pages/Customers';
@@ -43,6 +44,8 @@ function App() {
           >
             <Route index element={<Dashboard />} />
             <Route path="products" element={<Products />} />
+            <Route path="products/new" element={<ProductWizard />} />
+            <Route path="products/:id" element={<ProductWizard />} />
             <Route path="categories" element={<Categories />} />
             <Route path="brands" element={<Brands />} />
             <Route path="quotes" element={<Quotes />} />
