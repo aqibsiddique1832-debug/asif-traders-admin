@@ -13,6 +13,7 @@ import Products from './pages/Products';
 import Categories from './pages/Categories';
 import Brands from './pages/Brands';
 import ProductWizard from './pages/ProductWizard';
+import MediaLibrary from './pages/MediaLibrary';
 import Quotes from './pages/Quotes';
 import Orders from './pages/Orders';
 import Customers from './pages/Customers';
@@ -48,6 +49,7 @@ function App() {
             <Route path="products/:id" element={<ProductWizard />} />
             <Route path="categories" element={<Categories />} />
             <Route path="brands" element={<Brands />} />
+            <Route path="media" element={<MediaLibrary />} />
             <Route path="quotes" element={<Quotes />} />
             <Route path="orders" element={<Orders />} />
             <Route path="customers" element={<Customers />} />
