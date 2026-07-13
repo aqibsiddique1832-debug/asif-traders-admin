@@ -141,23 +141,18 @@ export default function Topbar({
         <div className="flex-1 md:hidden" />
 
         <div className="flex items-center gap-1 sm:gap-2">
-          {/* Search button */}
+          {/* Search button — responsive: collapsed on mobile, expanded on sm+, full label on lg+ */}
           <button
+            type="button"
             onClick={() => setSearchOpen(true)}
-            className="hidden sm:flex items-center gap-2 h-9 px-3 bg-ink-50 hover:bg-ink-100 border border-ink-200 rounded-lg text-sm text-ink-500 transition-colors w-64"
+            className="flex items-center gap-2 h-9 px-2.5 sm:px-3 bg-ink-50 hover:bg-ink-100 active:bg-ink-200 border border-ink-200 rounded-lg text-sm text-ink-500 transition-colors min-w-0 max-w-[140px] sm:max-w-[180px] md:max-w-[220px] lg:w-64 lg:max-w-none"
+            aria-label="Open search"
           >
-            <Search className="w-4 h-4" />
-            <span className="flex-1 text-left">Search anything…</span>
-            <kbd className="hidden lg:inline-flex items-center gap-0.5 text-2xs font-mono bg-white border border-ink-200 px-1.5 h-5 rounded">
+            <Search className="w-4 h-4 flex-shrink-0" />
+            <span className="flex-1 text-left truncate hidden xs:inline sm:inline">Search anything…</span>
+            <kbd className="hidden lg:inline-flex items-center gap-0.5 text-2xs font-mono bg-white border border-ink-200 px-1.5 h-5 rounded flex-shrink-0">
               <Command className="w-2.5 h-2.5" />K
             </kbd>
-          </button>
-          <button
-            onClick={() => setSearchOpen(true)}
-            className="sm:hidden w-10 h-10 rounded-lg text-ink-500 hover:bg-ink-100 hover:text-ink-900 flex items-center justify-center"
-            aria-label="Search"
-          >
-            <Search className="w-5 h-5" />
           </button>
 
           {/* Notifications — bell is its own clickable button */}
@@ -267,62 +262,244 @@ export default function Topbar({
         }}
       />
 
-      {/* ─── Command palette / search modal ──────────────── */}
-      {searchOpen && (
-        <div className="fixed inset-0 z-50 flex items-start justify-center pt-[10vh] px-4 animate-fade-in">
-          <div
-            className="absolute inset-0 bg-ink-900/40 backdrop-blur-sm"
-            onClick={() => setSearchOpen(false)}
-          />
-          <div className="relative w-full max-w-2xl bg-white rounded-3xl shadow-modal overflow-hidden animate-scale-in">
-            <div className="flex items-center gap-3 h-14 px-5 border-b border-ink-200">
-              <Search className="w-5 h-5 text-ink-400" />
-              <input
-                type="search"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                autoFocus
-                placeholder="Search products, orders, customers…"
-                className="flex-1 bg-transparent border-0 outline-none text-base text-ink-900 placeholder:text-ink-400"
-              />
-              <kbd className="text-2xs font-mono bg-ink-100 border border-ink-200 px-1.5 h-5 rounded">Esc</kbd>
-            </div>
-            <div className="max-h-[60vh] overflow-y-auto scroll-thin p-2">
-              <div className="px-3 pt-2 pb-1.5 text-2xs font-bold text-ink-500 uppercase tracking-wider">Quick actions</div>
-              {[
-                { icon: ShoppingBag, label: 'View all orders', to: '/orders' },
-                { icon: FileText, label: 'View all quotes', to: '/quotes' },
-                { icon: Package, label: 'Manage products', to: '/products' },
-                { icon: Users, label: 'Customer list', to: '/customers' },
-                { icon: LayoutDashboard, label: 'Go to dashboard', to: '/' },
-              ].map((q) => (
-                <button
-                  key={q.to}
-                  onClick={() => { navigate(q.to); setSearchOpen(false); }}
-                  className="w-full flex items-center gap-3 px-3 h-11 rounded-xl text-sm text-ink-700 hover:bg-ink-100 transition-colors"
-                >
-                  <q.icon className="w-4 h-4 text-ink-500" />
-                  <span className="flex-1 text-left">{q.label}</span>
-                  <ChevronRight className="w-3.5 h-3.5 text-ink-400" />
-                </button>
-              ))}
-            </div>
-            <div className="px-4 py-2.5 border-t border-ink-200/80 bg-ink-50/50 flex items-center justify-between text-2xs text-ink-500">
-              <div className="flex items-center gap-3">
-                <span className="flex items-center gap-1">
-                  <kbd className="font-mono bg-white border border-ink-200 px-1 h-4 rounded">↑↓</kbd> Navigate
-                </span>
-                <span className="flex items-center gap-1">
-                  <kbd className="font-mono bg-white border border-ink-200 px-1 h-4 rounded">↵</kbd> Select
-                </span>
-              </div>
-              <span>ASIF TRADERS v1.0</span>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* ─── Command palette / search modal (portal) ──────── */}
+      <SearchPalettePortal
+        open={searchOpen}
+        onClose={() => setSearchOpen(false)}
+        search={search}
+        setSearch={setSearch}
+        onNavigate={(to) => { setSearchOpen(false); navigate(to); }}
+      />
     </>
   );
+}
+
+// ─── Search Palette Portal — renders at body level ──────────
+function SearchPalettePortal({
+  open,
+  onClose,
+  search,
+  setSearch,
+  onNavigate,
+}: {
+  open: boolean;
+  onClose: () => void;
+  search: string;
+  setSearch: (s: string) => void;
+  onNavigate: (to: string) => void;
+}) {
+  const [isMobile, setIsMobile] = useState(
+    typeof window !== 'undefined' ? window.innerWidth < 768 : false
+  );
+
+  useEffect(() => {
+    const onResize = () => setIsMobile(window.innerWidth < 768);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+
+  // Body scroll lock when open on mobile
+  useEffect(() => {
+    if (!open || !isMobile) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => { document.body.style.overflow = prev; };
+  }, [open, isMobile]);
+
+  if (!open || typeof document === 'undefined') return null;
+
+  return createPortal(
+    <SearchPalette
+      onClose={onClose}
+      search={search}
+      setSearch={setSearch}
+      onNavigate={onNavigate}
+      isMobile={isMobile}
+    />,
+    document.body
+  );
+}
+
+// ─── Search Palette — full-screen on mobile, modal on desktop ─
+function SearchPalette({
+  onClose,
+  search,
+  setSearch,
+  onNavigate,
+  isMobile,
+}: {
+  onClose: () => void;
+  search: string;
+  setSearch: (s: string) => void;
+  onNavigate: (to: string) => void;
+  isMobile: boolean;
+}) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [activeIdx, setActiveIdx] = useState(0);
+
+  const quickActions = [
+    { icon: ShoppingBag, label: 'View all orders', to: '/orders', keywords: 'order orders sale' },
+    { icon: FileText, label: 'View all quotes', to: '/quotes', keywords: 'quote quotes estimate' },
+    { icon: Package, label: 'Manage products', to: '/products', keywords: 'product products catalog' },
+    { icon: Users, label: 'Customer list', to: '/customers', keywords: 'customer users' },
+    { icon: LayoutDashboard, label: 'Go to dashboard', to: '/', keywords: 'dashboard home main' },
+  ];
+
+  const filtered = quickActions.filter(
+    (q) => !search || `${q.label} ${q.keywords}`.toLowerCase().includes(search.toLowerCase())
+  );
+
+  // Reset active index on filter change
+  useEffect(() => { setActiveIdx(0); }, [search]);
+
+  // Keyboard nav
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setActiveIdx((i) => Math.min(i + 1, filtered.length - 1));
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setActiveIdx((i) => Math.max(i - 1, 0));
+      } else if (e.key === 'Enter' && filtered[activeIdx]) {
+        e.preventDefault();
+        onNavigate(filtered[activeIdx].to);
+      }
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [filtered, activeIdx, onNavigate]);
+
+  // Autofocus
+  useEffect(() => {
+    inputRef.current?.focus();
+  }, []);
+
+  const content = (
+    <div
+      className={clsx(
+        'flex flex-col bg-white overflow-hidden',
+        isMobile
+          ? 'fixed inset-0 z-[80] animate-fade-in'
+          : 'fixed inset-0 z-[80] flex items-start justify-center pt-[10vh] px-3 sm:px-4 animate-fade-in',
+      )}
+      style={isMobile ? { paddingTop: 'env(safe-area-inset-top, 0px)', paddingBottom: 'env(safe-area-inset-bottom, 0px)' } : undefined}
+    >
+      {/* Backdrop (desktop only — mobile is full-screen) */}
+      {!isMobile && (
+        <div
+          className="absolute inset-0 bg-ink-900/40 backdrop-blur-sm"
+          onClick={onClose}
+          aria-hidden="true"
+        />
+      )}
+
+      <div
+        className={clsx(
+          'relative bg-white flex flex-col overflow-hidden',
+          isMobile
+            ? 'w-full h-full'
+            : 'w-full max-w-2xl rounded-2xl sm:rounded-3xl shadow-modal animate-scale-in',
+        )}
+        style={isMobile ? undefined : { maxHeight: 'min(640px, calc(100vh - 80px))' }}
+      >
+        {/* Input row */}
+        <div className="flex items-center gap-2 sm:gap-3 h-14 px-3 sm:px-5 border-b border-ink-200 flex-shrink-0">
+          <Search className="w-5 h-5 text-ink-400 flex-shrink-0" />
+          <input
+            ref={inputRef}
+            type="search"
+            inputMode="search"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search products, orders, customers…"
+            className="flex-1 min-w-0 bg-transparent border-0 outline-none text-base text-ink-900 placeholder:text-ink-400"
+            autoComplete="off"
+            autoCorrect="off"
+            autoCapitalize="off"
+            spellCheck={false}
+            enterKeyHint="search"
+          />
+          {isMobile ? (
+            <button
+              type="button"
+              onClick={onClose}
+              className="flex-shrink-0 h-9 px-3 rounded-lg text-sm font-semibold text-accent-600 hover:bg-accent-50 active:bg-accent-100 transition-colors"
+            >
+              Cancel
+            </button>
+          ) : (
+            <kbd className="hidden sm:inline-flex items-center text-2xs font-mono bg-ink-100 border border-ink-200 px-1.5 h-5 rounded flex-shrink-0">
+              Esc
+            </kbd>
+          )}
+        </div>
+
+        {/* Results / quick actions */}
+        <div
+          className="flex-1 overflow-y-auto scroll-thin"
+          style={{ WebkitOverflowScrolling: 'touch' }}
+        >
+          {filtered.length === 0 ? (
+            <div className="px-6 py-12 text-center">
+              <div className="w-12 h-12 mx-auto rounded-full bg-ink-100 flex items-center justify-center mb-3">
+                <Search className="w-5 h-5 text-ink-400" />
+              </div>
+              <p className="text-sm font-semibold text-ink-900">No results for “{search}”</p>
+              <p className="text-2xs text-ink-500 mt-1">Try different keywords</p>
+            </div>
+          ) : (
+            <>
+              <div className="px-3 sm:px-5 pt-2 pb-1.5 text-2xs font-bold text-ink-500 uppercase tracking-wider">
+                {search ? 'Results' : 'Quick actions'}
+              </div>
+              <ul className="px-1 sm:px-2 pb-2">
+                {filtered.map((q, idx) => {
+                  const Icon = q.icon;
+                  return (
+                    <li key={q.to}>
+                      <button
+                        type="button"
+                        onClick={() => onNavigate(q.to)}
+                        onMouseEnter={() => setActiveIdx(idx)}
+                        className={clsx(
+                          'w-full flex items-center gap-3 px-2.5 sm:px-3 h-11 rounded-xl text-sm transition-colors text-left',
+                          activeIdx === idx
+                            ? 'bg-accent-50 text-accent-900'
+                            : 'text-ink-700 hover:bg-ink-100',
+                        )}
+                      >
+                        <Icon className={clsx('w-4 h-4 flex-shrink-0', activeIdx === idx ? 'text-accent-600' : 'text-ink-500')} />
+                        <span className="flex-1 truncate">{q.label}</span>
+                        <ChevronRight className={clsx('w-3.5 h-3.5 flex-shrink-0', activeIdx === idx ? 'text-accent-600' : 'text-ink-400')} />
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            </>
+          )}
+        </div>
+
+        {/* Footer hints */}
+        {!isMobile && (
+          <div className="px-3 sm:px-4 py-2 border-t border-ink-200/80 bg-ink-50/50 flex items-center justify-between text-2xs text-ink-500 gap-2 flex-shrink-0">
+            <div className="flex items-center gap-3 min-w-0">
+              <span className="flex items-center gap-1 flex-shrink-0">
+                <kbd className="font-mono bg-white border border-ink-200 px-1 h-4 rounded">↑↓</kbd> Navigate
+              </span>
+              <span className="flex items-center gap-1 flex-shrink-0">
+                <kbd className="font-mono bg-white border border-ink-200 px-1 h-4 rounded">↵</kbd> Select
+              </span>
+            </div>
+            <span className="flex-shrink-0 truncate">ASIF TRADERS v1.0</span>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+
+  return content;
 }
 
 // ─── Notification Panel Portal (renders at body level) ─────
