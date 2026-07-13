@@ -12,6 +12,16 @@ export default {
   ],
   theme: {
     extend: {
+      // ─── Responsive Breakpoints (mobile-first)
+      screens: {
+        xs:  "375px",
+        sm:  "640px",
+        md:  "768px",
+        lg:  "1024px",
+        xl:  "1280px",
+        "2xl": "1536px",
+      },
+
       // ─── 8pt Spacing Scale ─────────────────────────────
       // Default Tailwind: 0, 0.5(2), 1(4), 1.5(6), 2(8), 2.5(10),
       // 3(12), 3.5(14), 4(16), 5(20), 6(24), 7(28), 8(32), 9(36),
@@ -27,6 +37,19 @@ export default {
         '18':   '4.5rem',   // 72px - topbar height
         '72':   '18rem',    // 288px - sidebar expanded
         '80':   '20rem',    // 320px - sidebar mobile
+      },
+
+      // ─── Min-Height (touch targets)
+      minHeight: {
+        'touch':    '44px',
+        'touch-lg': '48px',
+        'touch-xl': '52px',
+      },
+
+      // ─── Min-Width (touch targets)
+      minWidth: {
+        'touch':    '44px',
+        'touch-lg': '48px',
       },
 
       // ─── Border Radius (Premium Scale) ───────────────

@@ -77,7 +77,7 @@
     @apply btn bg-accent-500 text-white shadow-sm shadow-accent-500/20
            hover:bg-accent-600 hover:shadow-md hover:shadow-accent-500/25 hover:-translate-y-px
            active:bg-accent-700 active:translate-y-0
-           rounded-lg px-4 h-10 text-sm;  /* 10px radius, 40px height */
+           rounded-lg px-4 h-11 sm:h-10 text-sm;
   }
 
   .btn-primary-lg { @apply btn-primary h-12 px-5 text-base rounded-xl; }
@@ -86,39 +86,39 @@
     @apply btn bg-white border border-ink-200 text-ink-700 shadow-xs
            hover:bg-ink-50 hover:border-ink-300 hover:text-ink-900
            active:bg-ink-100
-           rounded-lg px-4 h-10 text-sm;
+           rounded-lg px-4 h-11 sm:h-10 text-sm;
   }
 
   .btn-outline {
     @apply btn bg-transparent border border-accent-500 text-accent-600
            hover:bg-accent-50
-           rounded-lg px-4 h-10 text-sm;
+           rounded-lg px-4 h-11 sm:h-10 text-sm;
   }
 
   .btn-ghost {
     @apply btn text-ink-600 hover:bg-ink-100 hover:text-ink-900
            active:bg-ink-200
-           rounded-lg px-3 h-10 text-sm;
+           rounded-lg px-3 h-11 sm:h-10 text-sm;
   }
 
   .btn-danger {
     @apply btn bg-danger-500 text-white shadow-sm shadow-danger-500/20
            hover:bg-danger-600 hover:shadow-md
-           rounded-lg px-4 h-10 text-sm;
+           rounded-lg px-4 h-11 sm:h-10 text-sm;
   }
 
   .btn-icon {
     @apply btn text-ink-500 bg-white border border-ink-200
            hover:bg-ink-50 hover:text-ink-900
-           rounded-lg w-10 h-10 p-0;
+           rounded-lg w-11 h-11 sm:w-10 sm:h-10 p-0;
   }
 
-  .btn-sm { @apply h-8 px-3 text-xs rounded-md; }
+  .btn-sm { @apply h-9 sm:h-8 px-3 text-xs rounded-md min-h-[36px] sm:min-h-[32px]; }
   .btn-lg { @apply h-12 px-5 text-base rounded-xl; }
 
   /* ─── Input (12px radius per Part 1A) ─────────────── */
   .input {
-    @apply w-full bg-white border border-ink-200 rounded-xl px-3.5 h-10 text-sm text-ink-900
+    @apply w-full max-w-full bg-white border border-ink-200 rounded-xl px-3.5 h-11 sm:h-10 text-sm text-ink-900
            placeholder:text-ink-400
            transition-all duration-200
            hover:border-ink-300

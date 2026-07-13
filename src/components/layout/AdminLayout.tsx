@@ -100,7 +100,7 @@ export default function AdminLayout() {
           sidebarCollapsed={sidebarCollapsed}
         />
 
-        <main className="flex-1 px-3 sm:px-5 lg:px-8 py-5 lg:py-8 max-w-[1600px] w-full mx-auto">
+        <main className="flex-1 px-4 sm:px-5 lg:px-8 py-4 sm:py-5 lg:py-8 w-full max-w-[1600px] mx-auto overflow-x-hidden">
           <Outlet />
         </main>
       </div>

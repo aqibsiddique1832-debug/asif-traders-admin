@@ -461,19 +461,19 @@ export function Toolbar({
   actions?: ReactNode;
 }) {
   return (
-    <div className="flex flex-col sm:flex-row sm:items-center gap-3 mb-4">
-      <div className="relative flex-1 max-w-md">
+    <div className="flex flex-col sm:flex-row sm:items-center gap-3 mb-4 w-full">
+      <div className="relative w-full sm:flex-1 sm:max-w-md">
         <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-ink-400 pointer-events-none" />
         <input
           type="search"
           value={search}
           onChange={(e) => onSearchChange?.(e.target.value)}
           placeholder={placeholder}
-          className="input-search"
+          className="input-search w-full min-h-touch"
           aria-label="Search"
         />
       </div>
-      <div className="flex items-center gap-2 flex-wrap">
+      <div className="flex items-center gap-2 flex-wrap w-full sm:w-auto">
         {children}
         {actions}
       </div>
@@ -494,13 +494,19 @@ export function Tabs({
   className?: string;
 }) {
   return (
-    <div className={clsx('inline-flex items-center gap-1 p-1 bg-ink-100 rounded-lg', className)}>
+    <div
+      className={clsx(
+        'flex items-center gap-1 p-1 bg-ink-100 rounded-lg w-full max-w-full overflow-x-auto scroll-thin',
+        className,
+      )}
+      role="tablist"
+    >
       {tabs.map((t) => (
         <button
           key={t.value}
           onClick={() => onChange(t.value)}
           className={clsx(
-            'inline-flex items-center gap-1.5 px-3 h-7 text-xs font-medium rounded-md transition-all duration-200',
+            'inline-flex items-center justify-center gap-1.5 px-3 h-9 sm:h-8 text-xs font-medium rounded-md transition-all duration-200 flex-shrink-0 whitespace-nowrap min-h-[36px] sm:min-h-[32px]',
             active === t.value
               ? 'bg-white text-ink-900 shadow-sm'
               : 'text-ink-600 hover:text-ink-900',
@@ -538,11 +544,11 @@ export function PageHeader({
   breadcrumbs?: { label: string; to?: string }[];
 }) {
   return (
-    <div className="mb-6 sm:mb-8">
+    <div className="mb-5 sm:mb-6 lg:mb-8 w-full">
       {breadcrumbs && breadcrumbs.length > 0 && (
-        <nav className="flex items-center gap-1.5 text-xs text-ink-500 mb-2" aria-label="Breadcrumb">
+        <nav className="flex items-center gap-1.5 text-xs text-ink-500 mb-2 overflow-x-auto scroll-thin whitespace-nowrap" aria-label="Breadcrumb">
           {breadcrumbs.map((c, i) => (
-            <span key={i} className="flex items-center gap-1.5">
+            <span key={i} className="flex items-center gap-1.5 flex-shrink-0">
               {i > 0 && <span className="text-ink-300">/</span>}
               <span className={i === breadcrumbs.length - 1 ? 'text-ink-700 font-medium' : ''}>
                 {c.label}
@@ -551,14 +557,18 @@ export function PageHeader({
           ))}
         </nav>
       )}
-      <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-3">
-        <div className="min-w-0">
-          <h1 className="text-3xl font-bold text-ink-900 tracking-tight text-balance">{title}</h1>
+      <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-3 sm:gap-4 w-full">
+        <div className="min-w-0 flex-1">
+          <h1 className="text-2xl sm:text-3xl font-bold text-ink-900 tracking-tight text-balance leading-tight">{title}</h1>
           {description && (
             <p className="text-sm text-ink-500 mt-1.5 text-pretty max-w-2xl">{description}</p>
           )}
         </div>
-        {actions && <div className="flex items-center gap-2 flex-shrink-0">{actions}</div>}
+        {actions && (
+          <div className="flex items-center gap-2 flex-shrink-0 w-full sm:w-auto overflow-x-auto scroll-thin">
+            {actions}
+          </div>
+        )}
       </div>
     </div>
   );

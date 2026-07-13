@@ -213,10 +213,10 @@ export default function Orders() {
         description={`${total} orders · ${formatCurrency(revenue.thisMonth)} revenue this month`}
         breadcrumbs={[{ label: 'Sales' }, { label: 'Orders' }]}
         actions={
-          <>
-            <Button variant="secondary" leftIcon={Download}>Export</Button>
-            <Button variant="secondary" leftIcon={Printer}>Print Queue</Button>
-          </>
+          <div className="flex items-center gap-2 w-full sm:w-auto">
+            <Button variant="secondary" leftIcon={Download} className="flex-1 sm:flex-none justify-center">Export</Button>
+            <Button variant="secondary" leftIcon={Printer} className="flex-1 sm:flex-none justify-center">Print Queue</Button>
+          </div>
         }
       />
 
