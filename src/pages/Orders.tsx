@@ -23,6 +23,7 @@ import {
 import { orderService } from '../lib/services';
 import { formatCurrency, formatDate, relativeTime } from '../lib/auth';
 import type { Order, Address } from '../types';
+import { PrintModal, StatusAutomationPanel } from '../components/orders/PrintModal';
 
 // ─── Status config (8-stage workflow) ──────────────────────
 type OrderStatus = 'PENDING' | 'CONFIRMED' | 'PROCESSING' | 'SHIPPED' | 'OUT_FOR_DELIVERY' | 'DELIVERED' | 'CANCELLED' | 'REFUNDED' | 'RETURNED';
@@ -80,6 +81,8 @@ export default function Orders() {
   // Detail
   const [detail, setDetail] = useState<Order | null>(null);
   const [statusModal, setStatusModal] = useState<Order | null>(null);
+  const [printingOrder, setPrintingOrder] = useState<Order | null>(null);
+  const [showAutomation, setShowAutomation] = useState(false);
 
   useEffect(() => {
     loadData();
@@ -181,6 +184,28 @@ export default function Orders() {
     }
   };
 
+  // ─── Bulk status advance ──────────────────────────────
+  const handleBulkAdvance = async (targetStatus: string) => {
+    if (selected.size === 0) {
+      toast.error('Select orders first');
+      return;
+    }
+    try {
+      await Promise.all(
+        Array.from(selected).map((id) => orderService.updateStatus(id, { status: targetStatus })),
+      );
+      toast.success(`Updated ${selected.size} orders to ${STATUS_MAP[targetStatus as OrderStatus]?.label || targetStatus}`);
+      clearSelection();
+      loadData();
+      loadStats();
+    } catch (err: any) {
+      toast.error(err.response?.data?.error?.message || 'Bulk update failed');
+    }
+  };
+
+  const handleSchedule = () => toast.success('Schedule update — coming soon');
+  const handleNotify = () => toast.success('Customer notification sent (simulated)');
+
   return (
     <div className="space-y-6 animate-fade-in pb-24">
       <PageHeader
@@ -231,6 +256,14 @@ export default function Orders() {
           { value: 'DELIVERED',        label: 'Delivered',        count: stats.byStatus.DELIVERED || 0 },
           { value: 'CANCELLED',        label: 'Cancelled',        count: stats.byStatus.CANCELLED || 0 },
         ]}
+      />
+
+      {/* ─── Status Automation Panel ────────────────────── */}
+      <StatusAutomationPanel
+        selectedCount={selected.size}
+        onBulkAdvance={handleBulkAdvance}
+        onSchedule={handleSchedule}
+        onNotify={handleNotify}
       />
 
       {/* ─── Toolbar ────────────────────────────────────── */}
@@ -371,7 +404,10 @@ export default function Orders() {
       )}
 
       {/* ─── Order detail drawer ─────────────────────────── */}
-      <OrderDetailDrawer order={detail} onClose={() => setDetail(null)} onStatusChange={setStatusModal} />
+      <OrderDetailDrawer order={detail} onClose={() => setDetail(null)} onStatusChange={setStatusModal} onPrint={setPrintingOrder} />
+
+      {/* ─── Print modal ────────────────────────────────── */}
+      <PrintModal open={!!printingOrder} onClose={() => setPrintingOrder(null)} order={printingOrder} />
 
       {/* ─── Status change modal ─────────────────────────── */}
       <StatusChangeModal
@@ -671,7 +707,7 @@ function OrdersTimeline({ orders, onView }: any) {
 }
 
 // ─── Order detail drawer (right slide-in) ───────────────────
-function OrderDetailDrawer({ order, onClose, onStatusChange }: { order: Order | null; onClose: () => void; onStatusChange: (o: Order) => void }) {
+function OrderDetailDrawer({ order, onClose, onStatusChange, onPrint }: { order: Order | null; onClose: () => void; onStatusChange: (o: Order) => void; onPrint: (o: Order) => void }) {
   if (!order) return null;
   const status = STATUS_MAP[order.status];
   const payStatus = PAYMENT_STATUS_MAP[order.paymentStatus] || PAYMENT_STATUS_MAP.PENDING;
@@ -717,7 +753,7 @@ function OrderDetailDrawer({ order, onClose, onStatusChange }: { order: Order | 
             <Button variant="primary" size="sm" leftIcon={Edit2} onClick={() => onStatusChange(order)}>
               Update Status
             </Button>
-            <Button variant="secondary" size="sm" leftIcon={Printer}>Print Invoice</Button>
+            <Button variant="secondary" size="sm" leftIcon={Printer} onClick={() => onPrint(order)}>Print Invoice</Button>
             <Button variant="secondary" size="sm" leftIcon={Copy}>Copy Details</Button>
             {order.status !== 'CANCELLED' && order.status !== 'DELIVERED' && (
               <Button variant="danger" size="sm" leftIcon={Ban}>Cancel</Button>
