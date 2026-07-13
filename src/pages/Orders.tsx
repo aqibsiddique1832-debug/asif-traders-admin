@@ -1,440 +1,1005 @@
 // ────────────────────────────────────────────────────────────
-// Orders — List + Filters + Details + Timeline + Cancel + Complete
+// Premium Orders — Part 2B-1A
+// 10 KPIs · 8-stage workflow · 11-col table · detail drawer
 // ────────────────────────────────────────────────────────────
 
-import { useEffect, useState } from 'react';
-import { orderService } from '../lib/services';
-import { Modal, FullPageLoader, EmptyState, Pagination } from '../components/ui/StatCard';
+import { useEffect, useState, useMemo } from 'react';
 import {
-  Search, Eye, ShoppingBag, Printer, XCircle, CheckCircle,
-  Truck, MapPin, Phone, Mail, Calendar, User as UserIcon, Package
+  ShoppingBag, Search, Filter, Download, Printer, Truck, X, Check,
+  CheckCircle2, AlertTriangle, Clock, XCircle, Package, DollarSign,
+  TrendingUp, Calendar, ChevronRight, MoreVertical, Eye, MapPin,
+  Phone, Mail, Hash, ArrowRight, User as UserIcon, RotateCcw,
+  List as ListIcon, Grid3x3, GitBranch, Layers, FileText, Edit2,
+  ChevronDown, Plus, CreditCard, Box, Activity, ArrowUpRight,
+  Pause, Play, Ban, RefreshCcw, Send, Copy,
 } from 'lucide-react';
-import { formatCurrency, formatDate, formatDateTime, getStatusColor } from '../lib/auth';
-import type { Order } from '../types';
-import toast from 'react-hot-toast';
 import clsx from 'clsx';
+import { Link } from 'react-router-dom';
+import toast from 'react-hot-toast';
+import {
+  Card, CardHeader, CardBody, Button, Badge, PageHeader, EmptyState,
+  Skeleton, Modal, ConfirmDialog, Pagination, Tabs,
+} from '../components/ui/StatCard';
+import { orderService } from '../lib/services';
+import { formatCurrency, formatDate, relativeTime } from '../lib/auth';
+import type { Order, Address } from '../types';
+
+// ─── Status config (8-stage workflow) ──────────────────────
+type OrderStatus = 'PENDING' | 'CONFIRMED' | 'PROCESSING' | 'SHIPPED' | 'OUT_FOR_DELIVERY' | 'DELIVERED' | 'CANCELLED' | 'REFUNDED' | 'RETURNED';
+
+const STATUS_FLOW: OrderStatus[] = [
+  'PENDING', 'CONFIRMED', 'PROCESSING', 'SHIPPED', 'OUT_FOR_DELIVERY', 'DELIVERED',
+];
+
+const STATUS_MAP: Record<OrderStatus, { label: string; variant: any; color: string; bg: string; icon: any; step: number }> = {
+  PENDING:         { label: 'Pending',          variant: 'warning', color: 'text-warning-700', bg: 'bg-warning-subtle',  icon: Clock,         step: 0 },
+  CONFIRMED:       { label: 'Confirmed',        variant: 'info',    color: 'text-info-700',    bg: 'bg-info-subtle',     icon: CheckCircle2,  step: 1 },
+  PROCESSING:      { label: 'Processing',       variant: 'info',    color: 'text-info-700',    bg: 'bg-info-subtle',     icon: Box,           step: 2 },
+  SHIPPED:         { label: 'Shipped',          variant: 'accent',  color: 'text-accent-700',  bg: 'bg-accent-50',       icon: Truck,         step: 3 },
+  OUT_FOR_DELIVERY:{ label: 'Out for Delivery', variant: 'accent',  color: 'text-accent-700',  bg: 'bg-accent-50',       icon: Truck,         step: 4 },
+  DELIVERED:       { label: 'Delivered',        variant: 'success', color: 'text-success-700', bg: 'bg-success-subtle', icon: CheckCircle2,  step: 5 },
+  CANCELLED:       { label: 'Cancelled',        variant: 'danger',  color: 'text-danger-700',  bg: 'bg-danger-subtle',   icon: XCircle,       step: -1 },
+  REFUNDED:        { label: 'Refunded',         variant: 'danger',  color: 'text-danger-700',  bg: 'bg-danger-subtle',   icon: RotateCcw,     step: -1 },
+  RETURNED:        { label: 'Returned',         variant: 'warning', color: 'text-warning-700', bg: 'bg-warning-subtle', icon: RotateCcw,     step: -1 },
+};
+
+const PAYMENT_STATUS_MAP: Record<string, { label: string; variant: any; icon: any }> = {
+  PENDING:  { label: 'Pending',  variant: 'warning', icon: Clock },
+  PAID:     { label: 'Paid',     variant: 'success', icon: CheckCircle2 },
+  FAILED:   { label: 'Failed',   variant: 'danger',  icon: XCircle },
+  REFUNDED: { label: 'Refunded', variant: 'info',    icon: RotateCcw },
+};
+
+// ─── View modes ─────────────────────────────────────────────
+type ViewMode = 'table' | 'grid' | 'timeline';
 
 export default function Orders() {
-  const [data, setData] = useState<Order[]>([]);
-  const [pagination, setPagination] = useState({ page: 1, limit: 20, total: 0, totalPages: 1 });
+  const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
-  const [statusFilter, setStatusFilter] = useState('');
-  const [paymentFilter, setPaymentFilter] = useState('');
-  const [selected, setSelected] = useState<Order | null>(null);
+  const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [total, setTotal] = useState(0);
+  const [pageSize] = useState(20);
 
-  const load = async (page = 1) => {
-    setLoading(true);
+  // Filters
+  const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [paymentFilter, setPaymentFilter] = useState<string>('all');
+  const [sortBy, setSortBy] = useState('newest');
+
+  // Stats from /admin/orders/stats
+  const [stats, setStats] = useState<{ total: number; today: number; byStatus: Record<string, number> }>({ total: 0, today: 0, byStatus: {} });
+  const [revenue, setRevenue] = useState({ total: 0, thisMonth: 0, lastMonth: 0 });
+
+  // Selection
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+
+  // View
+  const [view, setView] = useState<ViewMode>('table');
+
+  // Detail
+  const [detail, setDetail] = useState<Order | null>(null);
+  const [statusModal, setStatusModal] = useState<Order | null>(null);
+
+  useEffect(() => {
+    loadData();
+  }, [page, statusFilter, paymentFilter, sortBy, search]);
+
+  useEffect(() => {
+    loadStats();
+  }, []);
+
+  const loadStats = async () => {
     try {
-      const params: any = { page, limit: 20 };
-      if (search) params.search = search;
-      if (statusFilter) params.status = statusFilter;
-      if (paymentFilter) params.paymentStatus = paymentFilter;
-      const res = await orderService.list(params);
-      setData(res.data);
-      setPagination(res.pagination);
-    } catch {} finally { setLoading(false); }
+      const res = await orderService.stats();
+      setStats(res);
+      // Calculate revenue from visible orders
+      const allOrders = await orderService.list({ limit: 100 });
+      const list = (allOrders as any).data || [];
+      const totalRev = list.reduce((s: number, o: Order) => s + parseFloat(o.total), 0);
+      const now = new Date();
+      const thisMonthStart = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+      const lastMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1).getTime();
+      const thisMonth = list.filter((o: Order) => new Date(o.createdAt).getTime() >= thisMonthStart).reduce((s: number, o: Order) => s + parseFloat(o.total), 0);
+      const lastMonth = list.filter((o: Order) => {
+        const t = new Date(o.createdAt).getTime();
+        return t >= lastMonthStart && t < thisMonthStart;
+      }).reduce((s: number, o: Order) => s + parseFloat(o.total), 0);
+      setRevenue({ total: totalRev, thisMonth, lastMonth });
+    } catch (err) {
+      console.error(err);
+    }
   };
 
-  useEffect(() => { load(); }, []);
+  const loadData = async () => {
+    try {
+      setLoading(true);
+      const params: any = { page, limit: pageSize };
+      if (search) params.search = search;
+      if (statusFilter !== 'all') params.status = statusFilter;
+      if (paymentFilter !== 'all') params.paymentStatus = paymentFilter;
+      params.sortBy = sortBy === 'newest' ? 'createdAt' : sortBy === 'oldest' ? 'createdAt' : 'total';
+      params.sortOrder = sortBy === 'oldest' ? 'asc' : 'desc';
+      const res = await orderService.list(params);
+      setOrders((res as any).data || []);
+      const total = (res as any).total ?? (res as any).pagination?.total ?? 0;
+      const totalPages = (res as any).totalPages ?? (res as any).pagination?.totalPages ?? 1;
+      setTotal(total);
+      setTotalPages(totalPages);
+    } catch (err) {
+      toast.error('Failed to load orders');
+    } finally {
+      setLoading(false);
+    }
+  };
 
-  const handleSearch = (e: React.FormEvent) => { e.preventDefault(); load(1); };
+  // ─── Stats ────────────────────────────────────────────
+  const kpis = useMemo(() => [
+    { label: 'Total Orders',     value: stats.total,                              icon: ShoppingBag,  accent: 'info' as const,    badge: 'all' },
+    { label: 'Today',            value: stats.today,                              icon: Calendar,     accent: 'accent' as const,  badge: 'today' },
+    { label: 'Pending',          value: stats.byStatus.PENDING || 0,              icon: Clock,        accent: 'warning' as const, badge: 'PENDING' },
+    { label: 'Confirmed',        value: stats.byStatus.CONFIRMED || 0,            icon: CheckCircle2, accent: 'info' as const,    badge: 'CONFIRMED' },
+    { label: 'Processing',       value: stats.byStatus.PROCESSING || 0,           icon: Box,          accent: 'info' as const,    badge: 'PROCESSING' },
+    { label: 'Shipped',          value: stats.byStatus.SHIPPED || 0,              icon: Truck,        accent: 'accent' as const,  badge: 'SHIPPED' },
+    { label: 'Out for Delivery', value: stats.byStatus.OUT_FOR_DELIVERY || 0,      icon: Truck,        accent: 'accent' as const,  badge: 'OUT_FOR_DELIVERY' },
+    { label: 'Delivered',        value: stats.byStatus.DELIVERED || 0,            icon: CheckCircle2, accent: 'success' as const, badge: 'DELIVERED' },
+    { label: 'Cancelled',        value: (stats.byStatus.CANCELLED || 0) + (stats.byStatus.REFUNDED || 0) + (stats.byStatus.RETURNED || 0), icon: XCircle, accent: 'danger' as const, badge: 'CANCELLED' },
+    { label: 'Revenue (₹)',      value: formatCurrency(revenue.thisMonth),        icon: DollarSign,   accent: 'success' as const, badge: 'revenue' },
+  ], [stats, revenue]);
+
+  // ─── Selection ────────────────────────────────────────
+  const allOnPageSelected = orders.length > 0 && orders.every((o) => selected.has(o.id));
+  const someOnPageSelected = orders.some((o) => selected.has(o.id)) && !allOnPageSelected;
+  const toggleAll = () => {
+    if (allOnPageSelected) {
+      const n = new Set(selected);
+      orders.forEach((o) => n.delete(o.id));
+      setSelected(n);
+    } else {
+      const n = new Set(selected);
+      orders.forEach((o) => n.add(o.id));
+      setSelected(n);
+    }
+  };
+  const toggleOne = (id: string) => {
+    const n = new Set(selected);
+    if (n.has(id)) n.delete(id); else n.add(id);
+    setSelected(n);
+  };
+  const clearSelection = () => setSelected(new Set());
+
+  // ─── Status change handler ───────────────────────────
+  const handleStatusChange = async (order: Order, newStatus: OrderStatus) => {
+    try {
+      await orderService.updateStatus(order.id, { status: newStatus });
+      toast.success(`Order updated to ${STATUS_MAP[newStatus].label}`);
+      loadData();
+      loadStats();
+      setStatusModal(null);
+    } catch (err: any) {
+      toast.error(err.response?.data?.error?.message || 'Update failed');
+    }
+  };
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-bold text-secondary-900">Orders</h1>
-          <p className="text-sm text-secondary-500 mt-1">{pagination.total} orders</p>
-        </div>
+    <div className="space-y-6 animate-fade-in pb-24">
+      <PageHeader
+        title="Orders"
+        description={`${total} orders · ${formatCurrency(revenue.thisMonth)} revenue this month`}
+        breadcrumbs={[{ label: 'Sales' }, { label: 'Orders' }]}
+        actions={
+          <>
+            <Button variant="secondary" leftIcon={Download}>Export</Button>
+            <Button variant="secondary" leftIcon={Printer}>Print Queue</Button>
+          </>
+        }
+      />
+
+      {/* ─── 10 KPI cards ──────────────────────────────── */}
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
+        {kpis.map((k) => (
+          <KPICard
+            key={k.label}
+            {...k}
+            onClick={() => {
+              if (k.badge === 'all' || k.badge === 'today' || k.badge === 'revenue') {
+                setStatusFilter('all');
+              } else {
+                setStatusFilter(k.badge);
+              }
+              setPage(1);
+            }}
+            active={
+              (k.badge === 'all' && statusFilter === 'all') ||
+              (k.badge !== 'all' && k.badge !== 'today' && k.badge !== 'revenue' && statusFilter === k.badge)
+            }
+          />
+        ))}
       </div>
 
-      <div className="card p-4">
-        <form onSubmit={handleSearch} className="flex flex-col sm:flex-row gap-2">
-          <div className="relative flex-1">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-secondary-400" />
+      {/* ─── Tabs (quick status filter) ─────────────────── */}
+      <Tabs
+        active={statusFilter}
+        onChange={(v) => { setStatusFilter(v); setPage(1); clearSelection(); }}
+        tabs={[
+          { value: 'all',              label: 'All',              count: total },
+          { value: 'PENDING',          label: 'Pending',          count: stats.byStatus.PENDING || 0 },
+          { value: 'CONFIRMED',        label: 'Confirmed',        count: stats.byStatus.CONFIRMED || 0 },
+          { value: 'PROCESSING',       label: 'Processing',       count: stats.byStatus.PROCESSING || 0 },
+          { value: 'SHIPPED',          label: 'Shipped',          count: stats.byStatus.SHIPPED || 0 },
+          { value: 'OUT_FOR_DELIVERY', label: 'Out for Delivery', count: stats.byStatus.OUT_FOR_DELIVERY || 0 },
+          { value: 'DELIVERED',        label: 'Delivered',        count: stats.byStatus.DELIVERED || 0 },
+          { value: 'CANCELLED',        label: 'Cancelled',        count: stats.byStatus.CANCELLED || 0 },
+        ]}
+      />
+
+      {/* ─── Toolbar ────────────────────────────────────── */}
+      <Card>
+        <div className="p-3 sm:p-4 flex flex-col sm:flex-row sm:items-center gap-3">
+          <div className="relative flex-1 max-w-md">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-ink-400 pointer-events-none" />
             <input
+              type="search"
               value={search}
-              onChange={(e) => setSearch(e.target.value)}
+              onChange={(e) => { setSearch(e.target.value); setPage(1); }}
+              placeholder="Search by order #, customer, phone…"
               className="input pl-10"
-              placeholder="Search by order #, customer..."
             />
           </div>
-          <select value={statusFilter} onChange={(e) => { setStatusFilter(e.target.value); setTimeout(() => load(1), 0); }} className="input sm:w-40">
-            <option value="">All statuses</option>
-            <option value="PENDING">Pending</option>
-            <option value="CONFIRMED">Confirmed</option>
-            <option value="PROCESSING">Processing</option>
-            <option value="SHIPPED">Shipped</option>
-            <option value="OUT_FOR_DELIVERY">Out for delivery</option>
-            <option value="DELIVERED">Delivered</option>
-            <option value="CANCELLED">Cancelled</option>
-            <option value="REFUNDED">Refunded</option>
-          </select>
-          <select value={paymentFilter} onChange={(e) => { setPaymentFilter(e.target.value); setTimeout(() => load(1), 0); }} className="input sm:w-40">
-            <option value="">All payments</option>
-            <option value="PENDING">Pending</option>
-            <option value="PAID">Paid</option>
-            <option value="FAILED">Failed</option>
-            <option value="REFUNDED">Refunded</option>
-          </select>
-          <button type="submit" className="btn-primary">Search</button>
-        </form>
-      </div>
 
-      <div className="card overflow-hidden">
-        {loading ? <FullPageLoader /> : data.length === 0 ? (
-          <EmptyState title="No orders found" description="Orders placed from the website will appear here" icon={ShoppingBag} />
-        ) : (
-          <>
-            <div className="hidden md:block overflow-x-auto">
-              <table className="w-full">
-                <thead className="bg-secondary-50 border-b border-secondary-200">
-                  <tr>
-                    <th className="text-left text-xs font-semibold text-secondary-600 px-4 py-3">Order #</th>
-                    <th className="text-left text-xs font-semibold text-secondary-600 px-4 py-3">Customer</th>
-                    <th className="text-left text-xs font-semibold text-secondary-600 px-4 py-3">Date</th>
-                    <th className="text-left text-xs font-semibold text-secondary-600 px-4 py-3">Total</th>
-                    <th className="text-left text-xs font-semibold text-secondary-600 px-4 py-3">Payment</th>
-                    <th className="text-left text-xs font-semibold text-secondary-600 px-4 py-3">Status</th>
-                    <th className="text-right text-xs font-semibold text-secondary-600 px-4 py-3">Actions</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-secondary-200">
-                  {data.map((o) => (
-                    <tr key={o.id} className="table-row">
-                      <td className="px-4 py-3 font-mono text-sm font-medium text-secondary-900">{o.orderNumber}</td>
-                      <td className="px-4 py-3 text-sm">
-                        <div className="font-medium text-secondary-900">{o.user?.firstName || o.user?.email?.split('@')[0]}</div>
-                        <div className="text-xs text-secondary-500">{o.user?.email}</div>
-                      </td>
-                      <td className="px-4 py-3 text-sm text-secondary-500">{formatDate(o.createdAt)}</td>
-                      <td className="px-4 py-3 text-sm font-semibold text-secondary-900">{formatCurrency(o.total)}</td>
-                      <td className="px-4 py-3">
-                        <span className={getStatusColor(o.paymentStatus)}>{o.paymentStatus}</span>
-                      </td>
-                      <td className="px-4 py-3">
-                        <span className={getStatusColor(o.status)}>{o.status}</span>
-                      </td>
-                      <td className="px-4 py-3 text-right">
-                        <button onClick={() => setSelected(o)} className="btn btn-secondary btn-sm">
-                          <Eye className="w-3 h-3" /> View
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+          <div className="flex items-center gap-2 flex-wrap">
+            <select
+              value={paymentFilter}
+              onChange={(e) => { setPaymentFilter(e.target.value); setPage(1); }}
+              className="input h-9 text-sm w-auto min-w-[120px]"
+            >
+              <option value="all">All payments</option>
+              <option value="PAID">Paid</option>
+              <option value="PENDING">Pending</option>
+              <option value="FAILED">Failed</option>
+              <option value="REFUNDED">Refunded</option>
+            </select>
 
-            <div className="md:hidden divide-y divide-secondary-200">
-              {data.map((o) => (
-                <button key={o.id} onClick={() => setSelected(o)} className="w-full text-left p-4 hover:bg-secondary-50">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="font-mono text-xs text-secondary-500">{o.orderNumber}</span>
-                    <span className={getStatusColor(o.status)}>{o.status}</span>
-                  </div>
-                  <div className="font-medium text-secondary-900 mt-1">{o.user?.firstName || o.user?.email}</div>
-                  <div className="flex items-center justify-between mt-1 text-sm">
-                    <span className="text-secondary-500">{formatDate(o.createdAt)}</span>
-                    <span className="font-semibold">{formatCurrency(o.total)}</span>
-                  </div>
-                </button>
-              ))}
-            </div>
+            <select
+              value={sortBy}
+              onChange={(e) => setSortBy(e.target.value)}
+              className="input h-9 text-sm w-auto min-w-[140px]"
+            >
+              <option value="newest">Newest first</option>
+              <option value="oldest">Oldest first</option>
+              <option value="total-desc">Total high→low</option>
+              <option value="total-asc">Total low→high</option>
+            </select>
 
-            <div className="p-4 border-t border-secondary-200">
-              <Pagination page={pagination.page} totalPages={pagination.totalPages} total={pagination.total} limit={pagination.limit} onPageChange={load} />
+            <div className="flex items-center bg-ink-100 rounded-lg p-0.5">
+              <button
+                onClick={() => setView('table')}
+                className={clsx('flex items-center justify-center w-7 h-7 rounded-md transition-all', view === 'table' ? 'bg-white shadow-sm text-ink-900' : 'text-ink-500 hover:text-ink-900')}
+                aria-label="Table view"
+                title="Table"
+              >
+                <ListIcon className="w-4 h-4" />
+              </button>
+              <button
+                onClick={() => setView('grid')}
+                className={clsx('flex items-center justify-center w-7 h-7 rounded-md transition-all', view === 'grid' ? 'bg-white shadow-sm text-ink-900' : 'text-ink-500 hover:text-ink-900')}
+                aria-label="Grid view"
+                title="Grid"
+              >
+                <Grid3x3 className="w-4 h-4" />
+              </button>
+              <button
+                onClick={() => setView('timeline')}
+                className={clsx('flex items-center justify-center w-7 h-7 rounded-md transition-all', view === 'timeline' ? 'bg-white shadow-sm text-ink-900' : 'text-ink-500 hover:text-ink-900')}
+                aria-label="Timeline view"
+                title="Timeline"
+              >
+                <GitBranch className="w-4 h-4" />
+              </button>
             </div>
-          </>
+          </div>
+        </div>
+
+        {/* Bulk action bar */}
+        {selected.size > 0 && (
+          <div className="border-t border-ink-200 bg-accent-50/50 px-4 py-2.5 flex items-center gap-3 animate-slide-in">
+            <div className="flex items-center gap-2 text-sm">
+              <span className="font-semibold text-ink-900">{selected.size}</span>
+              <span className="text-ink-600">selected</span>
+            </div>
+            <div className="h-4 w-px bg-ink-300" />
+            <Button size="sm" variant="ghost" leftIcon={X} onClick={clearSelection}>Clear</Button>
+            <Button size="sm" variant="secondary" leftIcon={Check}>Mark Confirmed</Button>
+            <Button size="sm" variant="secondary" leftIcon={Truck}>Mark Shipped</Button>
+            <Button size="sm" variant="secondary" leftIcon={Printer}>Print Invoices</Button>
+            <div className="flex-1" />
+            <Button size="sm" variant="danger" leftIcon={Ban}>Cancel</Button>
+          </div>
         )}
-      </div>
+      </Card>
 
-      <OrderDetailsModal order={selected} onClose={() => setSelected(null)} onChange={() => { setSelected(null); load(pagination.page); }} />
+      {/* ─── Content ─────────────────────────────────────── */}
+      {loading ? (
+        <Card>
+          <div className="p-4 space-y-2">
+            {Array.from({ length: 6 }).map((_, i) => (
+              <Skeleton key={i} className="h-12 w-full" />
+            ))}
+          </div>
+        </Card>
+      ) : orders.length === 0 ? (
+        <Card>
+          <EmptyState
+            icon={ShoppingBag}
+            title="No orders found"
+            description={search || statusFilter !== 'all' ? 'Try adjusting filters' : 'Orders will appear here once customers place them.'}
+          />
+        </Card>
+      ) : view === 'table' ? (
+        <OrdersTable
+          orders={orders}
+          selected={selected}
+          allSelected={allOnPageSelected}
+          someSelected={someOnPageSelected}
+          onToggleAll={toggleAll}
+          onToggleOne={toggleOne}
+          onView={setDetail}
+          onStatusChange={setStatusModal}
+        />
+      ) : view === 'grid' ? (
+        <OrdersGrid
+          orders={orders}
+          selected={selected}
+          onToggleOne={toggleOne}
+          onView={setDetail}
+        />
+      ) : (
+        <OrdersTimeline orders={orders} onView={setDetail} />
+      )}
+
+      {/* ─── Pagination ──────────────────────────────────── */}
+      {!loading && orders.length > 0 && (
+        <Card>
+          <Pagination
+            page={page}
+            totalPages={totalPages}
+            total={total}
+            limit={pageSize}
+            onPageChange={(p) => { setPage(p); clearSelection(); }}
+          />
+        </Card>
+      )}
+
+      {/* ─── Order detail drawer ─────────────────────────── */}
+      <OrderDetailDrawer order={detail} onClose={() => setDetail(null)} onStatusChange={setStatusModal} />
+
+      {/* ─── Status change modal ─────────────────────────── */}
+      <StatusChangeModal
+        order={statusModal}
+        onClose={() => setStatusModal(null)}
+        onConfirm={handleStatusChange}
+      />
     </div>
   );
 }
 
-function OrderDetailsModal({ order, onClose, onChange }: { order: Order | null; onClose: () => void; onChange: () => void }) {
-  const [statusModal, setStatusModal] = useState(false);
-  const [cancelModal, setCancelModal] = useState(false);
-  const [timeline, setTimeline] = useState<any[]>([]);
-  const [loadingTimeline, setLoadingTimeline] = useState(false);
-
-  useEffect(() => {
-    if (order) {
-      setLoadingTimeline(true);
-      orderService.timeline(order.id).then((r) => setTimeline(r.timeline || [])).catch(() => {}).finally(() => setLoadingTimeline(false));
-    }
-  }, [order]);
-
-  if (!order) return null;
-
-  const handleComplete = async () => {
-    if (!confirm('Mark this order as delivered?')) return;
-    try {
-      await orderService.complete(order.id);
-      toast.success('Order marked as delivered');
-      onChange();
-    } catch (err: any) { toast.error(err.response?.data?.error?.message || 'Failed'); }
+// ─── KPI card ───────────────────────────────────────────────
+function KPICard({ label, value, icon: Icon, accent, onClick, active }: any) {
+  const accentMap: any = {
+    info:    { bg: 'bg-info-subtle text-info-600',     ring: 'ring-info-200' },
+    success: { bg: 'bg-success-subtle text-success-600', ring: 'ring-success-200' },
+    warning: { bg: 'bg-warning-subtle text-warning-600', ring: 'ring-warning-200' },
+    danger:  { bg: 'bg-danger-subtle text-danger-600',  ring: 'ring-danger-200' },
+    accent:  { bg: 'bg-accent-50 text-accent-600',      ring: 'ring-accent-200' },
   };
+  return (
+    <button
+      onClick={onClick}
+      className={clsx(
+        'card-hover p-4 text-left transition-all w-full',
+        active && 'ring-2 ring-accent-500 border-accent-300',
+      )}
+    >
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0 flex-1">
+          <p className="text-2xs font-bold text-ink-500 uppercase tracking-wider truncate">{label}</p>
+          <p className={clsx(
+            'text-2xl font-bold mt-1.5 tabular-nums truncate',
+            typeof value === 'string' ? 'text-lg' : 'text-2xl',
+            active ? 'text-accent-700' : 'text-ink-900',
+          )}>{value}</p>
+        </div>
+        <div className={clsx('w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 ring-1', accentMap[accent].bg, accentMap[accent].ring)}>
+          <Icon className="w-4 h-4" strokeWidth={2.25} />
+        </div>
+      </div>
+    </button>
+  );
+}
+
+// ─── 11-col table view ──────────────────────────────────────
+function OrdersTable({ orders, selected, allSelected, someSelected, onToggleAll, onToggleOne, onView, onStatusChange }: any) {
+  return (
+    <Card className="overflow-hidden">
+      <div className="overflow-x-auto scroll-thin">
+        <table className="w-full text-sm">
+          <thead className="bg-ink-50/80 border-b border-ink-200">
+            <tr>
+              <th className="w-10 px-3 py-3 text-left">
+                <input
+                  type="checkbox"
+                  checked={allSelected}
+                  ref={(el) => { if (el) el.indeterminate = someSelected; }}
+                  onChange={onToggleAll}
+                  className="rounded border-ink-300 text-accent-500 focus:ring-accent-500"
+                />
+              </th>
+              <th className="px-3 py-3 text-left text-2xs font-bold text-ink-500 uppercase tracking-wider">Order #</th>
+              <th className="px-3 py-3 text-left text-2xs font-bold text-ink-500 uppercase tracking-wider">Date</th>
+              <th className="px-3 py-3 text-left text-2xs font-bold text-ink-500 uppercase tracking-wider">Customer</th>
+              <th className="px-3 py-3 text-right text-2xs font-bold text-ink-500 uppercase tracking-wider">Items</th>
+              <th className="px-3 py-3 text-right text-2xs font-bold text-ink-500 uppercase tracking-wider">Total</th>
+              <th className="px-3 py-3 text-left text-2xs font-bold text-ink-500 uppercase tracking-wider">Payment</th>
+              <th className="px-3 py-3 text-left text-2xs font-bold text-ink-500 uppercase tracking-wider">Status</th>
+              <th className="px-3 py-3 text-left text-2xs font-bold text-ink-500 uppercase tracking-wider">Tracking</th>
+              <th className="px-3 py-3 text-left text-2xs font-bold text-ink-500 uppercase tracking-wider">8-Stage Progress</th>
+              <th className="w-10 px-3 py-3"></th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-ink-100">
+            {orders.map((o: Order) => {
+              const status = STATUS_MAP[o.status];
+              const payStatus = PAYMENT_STATUS_MAP[o.paymentStatus] || PAYMENT_STATUS_MAP.PENDING;
+              const customerName = `${o.user?.firstName || ''} ${o.user?.lastName || ''}`.trim() || o.user?.email || 'Customer';
+              const isSelected = selected.has(o.id);
+              return (
+                <tr
+                  key={o.id}
+                  className={clsx('transition-colors cursor-pointer', isSelected ? 'bg-accent-50/50' : 'hover:bg-ink-50/60')}
+                  onClick={() => onView(o)}
+                >
+                  <td className="px-3 py-3" onClick={(e) => e.stopPropagation()}>
+                    <input
+                      type="checkbox"
+                      checked={isSelected}
+                      onChange={() => onToggleOne(o.id)}
+                      className="rounded border-ink-300 text-accent-500 focus:ring-accent-500"
+                    />
+                  </td>
+                  <td className="px-3 py-3">
+                    <p className="font-semibold text-ink-900 font-mono text-xs">{o.orderNumber}</p>
+                  </td>
+                  <td className="px-3 py-3">
+                    <p className="text-ink-700 text-xs">{formatDate(o.createdAt)}</p>
+                    <p className="text-2xs text-ink-500">{relativeTime(o.createdAt)}</p>
+                  </td>
+                  <td className="px-3 py-3">
+                    <p className="text-ink-900 font-semibold text-sm truncate max-w-[140px]">{customerName}</p>
+                    {o.user?.phone && <p className="text-2xs text-ink-500">{o.user.phone}</p>}
+                  </td>
+                  <td className="px-3 py-3 text-right">
+                    <p className="font-semibold text-ink-900 tabular-nums">{o.items?.length || 0}</p>
+                    <p className="text-2xs text-ink-500">{(o.items || []).reduce((s, i) => s + i.quantity, 0)} units</p>
+                  </td>
+                  <td className="px-3 py-3 text-right">
+                    <p className="font-bold text-ink-900 tabular-nums">{formatCurrency(parseFloat(o.total))}</p>
+                    {o.discountAmount && parseFloat(o.discountAmount) > 0 && (
+                      <p className="text-2xs text-success-600">− {formatCurrency(parseFloat(o.discountAmount))}</p>
+                    )}
+                  </td>
+                  <td className="px-3 py-3">
+                    <Badge variant={payStatus.variant} dot>{payStatus.label}</Badge>
+                    <p className="text-2xs text-ink-500 mt-0.5 uppercase">{o.paymentMethod}</p>
+                  </td>
+                  <td className="px-3 py-3" onClick={(e) => e.stopPropagation()}>
+                    <button onClick={() => onStatusChange(o)}>
+                      <Badge variant={status.variant} dot>{status.label}</Badge>
+                    </button>
+                  </td>
+                  <td className="px-3 py-3">
+                    {o.trackingNumber ? (
+                      <div>
+                        <p className="font-mono text-2xs text-ink-700">{o.trackingNumber}</p>
+                        <p className="text-2xs text-ink-500">{o.carrier}</p>
+                      </div>
+                    ) : (
+                      <span className="text-ink-400 text-2xs">—</span>
+                    )}
+                  </td>
+                  <td className="px-3 py-3 min-w-[160px]">
+                    <WorkflowProgress currentStatus={o.status} />
+                  </td>
+                  <td className="px-3 py-3" onClick={(e) => e.stopPropagation()}>
+                    <ChevronRight className="w-4 h-4 text-ink-400" />
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </Card>
+  );
+}
+
+// ─── Workflow progress (8-stage mini bar) ──────────────────
+function WorkflowProgress({ currentStatus }: { currentStatus: string }) {
+  const step = STATUS_MAP[currentStatus as OrderStatus]?.step ?? -1;
+  if (step === -1) {
+    return (
+      <span className="text-2xs text-ink-500 italic">
+        {STATUS_MAP[currentStatus as OrderStatus]?.label || currentStatus}
+      </span>
+    );
+  }
+  return (
+    <div className="flex items-center gap-0.5">
+      {STATUS_FLOW.map((_, i) => (
+        <div
+          key={i}
+          className={clsx(
+            'h-1.5 flex-1 rounded-pill',
+            i <= step ? 'bg-accent-500' : 'bg-ink-200',
+          )}
+        />
+      ))}
+    </div>
+  );
+}
+
+// ─── Grid view ──────────────────────────────────────────────
+function OrdersGrid({ orders, selected, onToggleOne, onView }: any) {
+  return (
+    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+      {orders.map((o: Order) => {
+        const status = STATUS_MAP[o.status];
+        const customerName = `${o.user?.firstName || ''} ${o.user?.lastName || ''}`.trim() || o.user?.email || 'Customer';
+        return (
+          <Card
+            key={o.id}
+            className={clsx(
+              'cursor-pointer hover:border-accent-300 transition-all',
+              selected.has(o.id) && 'ring-2 ring-accent-500',
+            )}
+            onClick={() => onView(o)}
+          >
+            <div className="p-4">
+              <div className="flex items-start justify-between gap-2 mb-3">
+                <div>
+                  <p className="font-semibold text-ink-900 font-mono text-sm">{o.orderNumber}</p>
+                  <p className="text-2xs text-ink-500 mt-0.5">{relativeTime(o.createdAt)}</p>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={selected.has(o.id)}
+                  onChange={(e) => { e.stopPropagation(); onToggleOne(o.id); }}
+                  onClick={(e) => e.stopPropagation()}
+                  className="rounded border-ink-300 text-accent-500 focus:ring-accent-500"
+                />
+              </div>
+
+              <div className="space-y-2 mb-3">
+                <div className="flex items-center gap-2 text-sm">
+                  <UserIcon className="w-3.5 h-3.5 text-ink-400" />
+                  <span className="text-ink-700 truncate">{customerName}</span>
+                </div>
+                <div className="flex items-center gap-2 text-sm">
+                  <Package className="w-3.5 h-3.5 text-ink-400" />
+                  <span className="text-ink-700">{o.items?.length || 0} items</span>
+                </div>
+              </div>
+
+              <div className="flex items-end justify-between pt-3 border-t border-ink-100">
+                <div>
+                  <p className="text-2xs text-ink-500">Total</p>
+                  <p className="text-lg font-bold text-ink-900 tabular-nums">{formatCurrency(parseFloat(o.total))}</p>
+                </div>
+                <Badge variant={status.variant} dot>{status.label}</Badge>
+              </div>
+
+              <div className="mt-3">
+                <WorkflowProgress currentStatus={o.status} />
+              </div>
+            </div>
+          </Card>
+        );
+      })}
+    </div>
+  );
+}
+
+// ─── Timeline view (grouped by date) ────────────────────────
+function OrdersTimeline({ orders, onView }: any) {
+  const groups = useMemo(() => {
+    const map = new Map<string, Order[]>();
+    orders.forEach((o: Order) => {
+      const key = new Date(o.createdAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' });
+      if (!map.has(key)) map.set(key, []);
+      map.get(key)!.push(o);
+    });
+    return Array.from(map.entries());
+  }, [orders]);
 
   return (
-    <>
-      <Modal
-        open={!!order}
-        onClose={onClose}
-        title={<div className="flex items-center gap-2 flex-wrap"><span>Order {order.orderNumber}</span><span className={getStatusColor(order.status)}>{order.status}</span></div>}
-        size="2xl"
-        footer={
-          <div className="flex flex-wrap gap-2 w-full sm:w-auto">
-            <button onClick={() => window.print()} className="btn-secondary btn-sm"><Printer className="w-4 h-4" /> Print / Invoice</button>
-            {order.status !== 'CANCELLED' && order.status !== 'DELIVERED' && (
-              <>
-                <button onClick={() => setStatusModal(true)} className="btn-primary btn-sm"><Truck className="w-4 h-4" /> Update Status</button>
-                <button onClick={handleComplete} className="btn-secondary btn-sm"><CheckCircle className="w-4 h-4" /> Complete</button>
-                <button onClick={() => setCancelModal(true)} className="btn-danger btn-sm"><XCircle className="w-4 h-4" /> Cancel</button>
-              </>
-            )}
+    <div className="space-y-6">
+      {groups.map(([date, list]) => (
+        <div key={date} className="relative pl-8 sm:pl-12">
+          {/* Date marker */}
+          <div className="absolute left-0 top-0 bottom-0 w-px bg-ink-200" />
+          <div className="absolute left-0 top-2 -translate-x-1/2 w-7 h-7 rounded-full bg-white border-2 border-accent-500 flex items-center justify-center">
+            <Calendar className="w-3 h-3 text-accent-600" />
           </div>
-        }
-      >
-        <div className="space-y-5 print:text-black">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div className="p-4 bg-secondary-50 rounded-lg">
-              <h4 className="text-xs font-semibold text-secondary-500 uppercase mb-2">Customer</h4>
-              <p className="font-medium text-secondary-900 flex items-center gap-1.5"><UserIcon className="w-3.5 h-3.5" /> {order.user?.firstName} {order.user?.lastName}</p>
-              <p className="text-sm text-secondary-600 flex items-center gap-1.5 mt-1"><Mail className="w-3.5 h-3.5" /> {order.user?.email}</p>
-              {order.user?.phone && <p className="text-sm text-secondary-600 flex items-center gap-1.5 mt-1"><Phone className="w-3.5 h-3.5" /> {order.user.phone}</p>}
-            </div>
-            <div className="p-4 bg-secondary-50 rounded-lg">
-              <h4 className="text-xs font-semibold text-secondary-500 uppercase mb-2">Shipping Address</h4>
-              {order.address ? (
-                <>
-                  <p className="font-medium text-secondary-900">{order.address.fullName}</p>
-                  <p className="text-sm text-secondary-600 mt-1">{order.address.line1}{order.address.line2 ? `, ${order.address.line2}` : ''}</p>
-                  <p className="text-sm text-secondary-600">{order.address.city}, {order.address.state} - {order.address.pincode}</p>
-                  <p className="text-sm text-secondary-600 flex items-center gap-1.5 mt-1"><Phone className="w-3.5 h-3.5" /> {order.address.phone}</p>
-                </>
-              ) : <p className="text-sm text-secondary-500">No address</p>}
-            </div>
+          <div className="absolute left-0 top-12 -translate-x-1/2 w-2 h-2 rounded-pill bg-accent-500" />
+
+          <div className="mb-3">
+            <p className="text-sm font-bold text-ink-900">{date}</p>
+            <p className="text-2xs text-ink-500">{list.length} order{list.length > 1 ? 's' : ''}</p>
           </div>
 
-          {order.fromQuote && (
-            <div className="p-3 bg-info-light rounded-lg text-sm text-info-dark">
-              📋 Created from quote <span className="font-mono font-bold">{order.fromQuote.quoteNumber}</span>
+          <div className="space-y-2">
+            {list.map((o: Order) => {
+              const status = STATUS_MAP[o.status];
+              const customerName = `${o.user?.firstName || ''} ${o.user?.lastName || ''}`.trim() || o.user?.email || 'Customer';
+              return (
+                <button
+                  key={o.id}
+                  onClick={() => onView(o)}
+                  className="w-full card-hover p-3 text-left flex items-center gap-3"
+                >
+                  <div className={clsx('w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0', status.bg, status.color)}>
+                    <status.icon className="w-4 h-4" strokeWidth={2.25} />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <p className="font-semibold text-sm text-ink-900 font-mono">{o.orderNumber}</p>
+                      <span className="text-2xs text-ink-500">·</span>
+                      <p className="text-sm text-ink-700 truncate">{customerName}</p>
+                    </div>
+                    <p className="text-2xs text-ink-500 mt-0.5">
+                      {o.items?.length || 0} items · {new Date(o.createdAt).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}
+                    </p>
+                  </div>
+                  <p className="font-bold text-ink-900 tabular-nums">{formatCurrency(parseFloat(o.total))}</p>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ─── Order detail drawer (right slide-in) ───────────────────
+function OrderDetailDrawer({ order, onClose, onStatusChange }: { order: Order | null; onClose: () => void; onStatusChange: (o: Order) => void }) {
+  if (!order) return null;
+  const status = STATUS_MAP[order.status];
+  const payStatus = PAYMENT_STATUS_MAP[order.paymentStatus] || PAYMENT_STATUS_MAP.PENDING;
+  const customerName = `${order.user?.firstName || ''} ${order.user?.lastName || ''}`.trim() || order.user?.email || 'Customer';
+  const subtotal = parseFloat(order.subtotal);
+  const tax = parseFloat(order.taxAmount);
+  const shipping = parseFloat(order.shippingAmount);
+  const discount = parseFloat(order.discountAmount);
+  const total = parseFloat(order.total);
+
+  return (
+    <div className="fixed inset-0 z-50 animate-fade-in">
+      <div className="absolute inset-0 bg-ink-900/40 backdrop-blur-sm" onClick={onClose} />
+      <div
+        className="absolute top-0 right-0 h-full bg-white shadow-modal flex flex-col animate-slide-right"
+        style={{ width: 'min(640px, 100vw)', borderTopLeftRadius: 24, borderBottomLeftRadius: 24 }}
+      >
+        {/* Header */}
+        <div className="px-6 py-4 border-b border-ink-200 flex-shrink-0">
+          <div className="flex items-center justify-between gap-2">
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2">
+                <p className="text-2xs font-bold text-ink-500 uppercase tracking-wider">Order</p>
+                <Badge variant={status.variant} dot>{status.label}</Badge>
+              </div>
+              <h2 className="text-lg font-bold text-ink-900 font-mono mt-0.5">{order.orderNumber}</h2>
             </div>
+            <button onClick={onClose} className="w-8 h-8 rounded-lg text-ink-500 hover:bg-ink-100 hover:text-ink-900 flex items-center justify-center">
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+
+        <div className="flex-1 overflow-y-auto scroll-thin px-6 py-5 space-y-5">
+          {/* Workflow timeline */}
+          <div>
+            <p className="text-2xs font-bold text-ink-500 uppercase tracking-wider mb-3">Workflow Progress</p>
+            <WorkflowTimeline currentStatus={order.status} />
+          </div>
+
+          {/* Actions */}
+          <div className="flex flex-wrap gap-2">
+            <Button variant="primary" size="sm" leftIcon={Edit2} onClick={() => onStatusChange(order)}>
+              Update Status
+            </Button>
+            <Button variant="secondary" size="sm" leftIcon={Printer}>Print Invoice</Button>
+            <Button variant="secondary" size="sm" leftIcon={Copy}>Copy Details</Button>
+            {order.status !== 'CANCELLED' && order.status !== 'DELIVERED' && (
+              <Button variant="danger" size="sm" leftIcon={Ban}>Cancel</Button>
+            )}
+          </div>
+
+          {/* Customer */}
+          <Card>
+            <CardBody>
+              <p className="text-2xs font-bold text-ink-500 uppercase tracking-wider mb-2">Customer</p>
+              <div className="flex items-center gap-3">
+                <div className="w-11 h-11 rounded-pill bg-gradient-to-br from-accent-400 to-accent-600 text-white font-semibold flex items-center justify-center">
+                  {customerName.split(' ').map((n) => n[0]).slice(0, 2).join('').toUpperCase()}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="font-semibold text-ink-900 truncate">{customerName}</p>
+                  {order.user?.email && (
+                    <p className="text-2xs text-ink-500 flex items-center gap-1 truncate">
+                      <Mail className="w-3 h-3" /> {order.user.email}
+                    </p>
+                  )}
+                  {order.user?.phone && (
+                    <p className="text-2xs text-ink-500 flex items-center gap-1">
+                      <Phone className="w-3 h-3" /> {order.user.phone}
+                    </p>
+                  )}
+                </div>
+              </div>
+            </CardBody>
+          </Card>
+
+          {/* Address */}
+          {order.address && (
+            <Card>
+              <CardBody>
+                <p className="text-2xs font-bold text-ink-500 uppercase tracking-wider mb-2 flex items-center gap-1">
+                  <MapPin className="w-3 h-3" /> Delivery Address
+                </p>
+                <div className="text-sm text-ink-700 space-y-0.5">
+                  <p className="font-semibold text-ink-900">{order.address.fullName || customerName}</p>
+                  {order.address.line1 && <p>{order.address.line1}</p>}
+                  {order.address.line2 && <p>{order.address.line2}</p>}
+                  <p>{[order.address.city, order.address.state, order.address.pincode].filter(Boolean).join(', ')}</p>
+                  {order.address.phone && <p className="text-ink-500">📞 {order.address.phone}</p>}
+                </div>
+              </CardBody>
+            </Card>
           )}
 
-          <div>
-            <h4 className="text-sm font-semibold text-secondary-700 mb-2">Items ({order.items.length})</h4>
-            <div className="border border-secondary-200 rounded-lg overflow-hidden">
-              <table className="w-full text-sm">
-                <thead className="bg-secondary-50">
-                  <tr>
-                    <th className="text-left px-3 py-2">Product</th>
-                    <th className="text-center px-3 py-2">Qty</th>
-                    <th className="text-right px-3 py-2">Price</th>
-                    <th className="text-right px-3 py-2">Total</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-secondary-200">
-                  {order.items.map((item) => (
-                    <tr key={item.id}>
-                      <td className="px-3 py-2">
-                        <div className="flex items-center gap-2">
-                          {item.productImage ? <img src={item.productImage} className="w-8 h-8 rounded object-cover" /> : <Package className="w-8 h-8 text-secondary-300" />}
-                          <div>
-                            <div className="font-medium">{item.productName}</div>
-                            {item.variantName && <div className="text-xs text-secondary-500">{item.variantName}</div>}
-                          </div>
-                        </div>
-                      </td>
-                      <td className="px-3 py-2 text-center">{item.quantity} {item.unit}</td>
-                      <td className="px-3 py-2 text-right">{formatCurrency(item.unitPrice)}</td>
-                      <td className="px-3 py-2 text-right font-medium">{formatCurrency(item.totalPrice)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div className="space-y-1 text-sm">
-              <div className="flex justify-between"><span className="text-secondary-600">Subtotal</span><span>{formatCurrency(order.subtotal)}</span></div>
-              <div className="flex justify-between"><span className="text-secondary-600">Tax</span><span>{formatCurrency(order.taxAmount)}</span></div>
-              <div className="flex justify-between"><span className="text-secondary-600">Shipping</span><span>{formatCurrency(order.shippingAmount)}</span></div>
-              {parseFloat(order.discountAmount) > 0 && <div className="flex justify-between text-success-dark"><span>Discount</span><span>-{formatCurrency(order.discountAmount)}</span></div>}
-              <div className="flex justify-between font-bold text-base pt-1 border-t border-secondary-200">
-                <span>Total</span><span>{formatCurrency(order.total)}</span>
-              </div>
-            </div>
-            <div className="space-y-1 text-sm">
-              <div className="flex justify-between"><span className="text-secondary-600">Payment Method</span><span className="font-medium">{order.paymentMethod}</span></div>
-              <div className="flex justify-between"><span className="text-secondary-600">Payment Status</span><span className={getStatusColor(order.paymentStatus)}>{order.paymentStatus}</span></div>
-              {order.trackingNumber && <div className="flex justify-between"><span className="text-secondary-600">Tracking</span><span className="font-mono">{order.trackingNumber}</span></div>}
-              {order.carrier && <div className="flex justify-between"><span className="text-secondary-600">Carrier</span><span>{order.carrier}</span></div>}
-            </div>
-          </div>
-
-          {/* Timeline */}
-          <div>
-            <h4 className="text-sm font-semibold text-secondary-700 mb-2">Order Timeline</h4>
-            {loadingTimeline ? <div className="text-sm text-secondary-500">Loading...</div> : (
-              <div className="space-y-2">
-                {timeline.length === 0 ? <p className="text-sm text-secondary-500">No timeline events yet</p> : timeline.map((t, idx) => (
-                  <div key={t.id} className="flex gap-3 p-3 bg-secondary-50 rounded-lg">
-                    <div className="w-8 h-8 rounded-full bg-primary text-white flex items-center justify-center text-xs font-bold flex-shrink-0">
-                      {timeline.length - idx}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className={getStatusColor(t.status)}>{t.status}</span>
-                        <span className="text-xs text-secondary-500">{formatDateTime(t.createdAt)}</span>
+          {/* Items */}
+          <Card>
+            <CardHeader title="Items" description={`${order.items?.length || 0} product${(order.items?.length || 0) > 1 ? 's' : ''}`} />
+            <div className="divide-y divide-ink-100">
+              {(order.items || []).map((item) => (
+                <div key={item.id} className="flex items-center gap-3 px-5 py-3">
+                  <div className="w-12 h-12 rounded-xl bg-ink-100 ring-1 ring-ink-200 overflow-hidden flex-shrink-0">
+                    {item.productImage ? (
+                      <img src={item.productImage} alt={item.productName} className="w-full h-full object-cover" />
+                    ) : (
+                      <div className="w-full h-full flex items-center justify-center">
+                        <Package className="w-4 h-4 text-ink-400" />
                       </div>
-                      {t.message && <p className="text-sm text-secondary-700 mt-1">{t.message}</p>}
-                      {t.changedBy && <p className="text-xs text-secondary-500 mt-0.5">by {t.changedBy.firstName || t.changedBy.email}</p>}
-                    </div>
+                    )}
                   </div>
-                ))}
+                  <div className="flex-1 min-w-0">
+                    <p className="font-semibold text-ink-900 text-sm truncate">{item.productName}</p>
+                    {item.variantName && <p className="text-2xs text-ink-500">{item.variantName}</p>}
+                    <p className="text-2xs text-ink-500 mt-0.5">
+                      {item.quantity} × {formatCurrency(parseFloat(item.unitPrice || (item as any).finalUnitPrice || '0'))}
+                    </p>
+                  </div>
+                  <p className="font-semibold text-ink-900 tabular-nums">
+                    {formatCurrency(parseFloat(item.totalPrice || (item as any).finalTotalPrice || '0'))}
+                  </p>
+                </div>
+              ))}
+            </div>
+          </Card>
+
+          {/* Payment summary */}
+          <Card>
+            <CardBody className="space-y-2">
+              <div className="flex items-center justify-between">
+                <p className="text-2xs font-bold text-ink-500 uppercase tracking-wider">Payment</p>
+                <Badge variant={payStatus.variant} dot>{payStatus.label}</Badge>
               </div>
+              <p className="text-2xs text-ink-500 uppercase">{order.paymentMethod}</p>
+              {order.paymentRef && (
+                <p className="text-2xs text-ink-500 font-mono">Ref: {order.paymentRef}</p>
+              )}
+              <div className="border-t border-ink-100 pt-2 mt-2 space-y-1 text-sm">
+                <SummaryRow label="Subtotal" value={formatCurrency(subtotal)} />
+                {tax > 0 && <SummaryRow label="Tax" value={formatCurrency(tax)} />}
+                {shipping > 0 && <SummaryRow label="Shipping" value={formatCurrency(shipping)} />}
+                {discount > 0 && <SummaryRow label="Discount" value={`− ${formatCurrency(discount)}`} color="success" />}
+                <div className="border-t border-ink-100 pt-2 mt-2 flex items-center justify-between">
+                  <p className="font-bold text-ink-900">Total</p>
+                  <p className="text-lg font-bold text-ink-900 tabular-nums">{formatCurrency(total)}</p>
+                </div>
+              </div>
+            </CardBody>
+          </Card>
+
+          {/* Tracking */}
+          {(order.trackingNumber || order.carrier) && (
+            <Card>
+              <CardBody>
+                <p className="text-2xs font-bold text-ink-500 uppercase tracking-wider mb-2">Tracking</p>
+                <div className="text-sm space-y-1">
+                  {order.carrier && <p><span className="text-ink-500">Carrier:</span> <span className="font-semibold text-ink-900">{order.carrier}</span></p>}
+                  {order.trackingNumber && <p><span className="text-ink-500">Tracking #:</span> <span className="font-mono font-semibold text-ink-900">{order.trackingNumber}</span></p>}
+                </div>
+              </CardBody>
+            </Card>
+          )}
+
+          {/* Notes */}
+          {(order.notes || order.internalNotes) && (
+            <Card>
+              <CardBody>
+                {order.notes && (
+                  <div className="mb-2">
+                    <p className="text-2xs font-bold text-ink-500 uppercase tracking-wider">Customer Note</p>
+                    <p className="text-sm text-ink-700 mt-1">{order.notes}</p>
+                  </div>
+                )}
+                {order.internalNotes && (
+                  <div>
+                    <p className="text-2xs font-bold text-ink-500 uppercase tracking-wider">Internal Note</p>
+                    <p className="text-sm text-ink-700 mt-1">{order.internalNotes}</p>
+                  </div>
+                )}
+              </CardBody>
+            </Card>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SummaryRow({ label, value, color }: { label: string; value: string; color?: 'success' }) {
+  return (
+    <div className="flex items-center justify-between">
+      <span className="text-ink-600">{label}</span>
+      <span className={clsx('font-semibold tabular-nums', color === 'success' && 'text-success-700')}>{value}</span>
+    </div>
+  );
+}
+
+// ─── 8-stage workflow timeline ──────────────────────────────
+function WorkflowTimeline({ currentStatus }: { currentStatus: string }) {
+  const step = STATUS_MAP[currentStatus as OrderStatus]?.step ?? -1;
+  const isCancelled = currentStatus === 'CANCELLED' || currentStatus === 'REFUNDED' || currentStatus === 'RETURNED';
+
+  return (
+    <div className="flex items-center gap-1 overflow-x-auto scroll-thin pb-1">
+      {STATUS_FLOW.map((status, i) => {
+        const cfg = STATUS_MAP[status];
+        const isDone = !isCancelled && i < step;
+        const isCurrent = !isCancelled && i === step;
+        return (
+          <div key={status} className="flex items-center gap-1 flex-shrink-0">
+            <div className="flex flex-col items-center gap-1.5 min-w-[80px]">
+              <div
+                className={clsx(
+                  'w-8 h-8 rounded-full flex items-center justify-center transition-all',
+                  isCurrent && 'bg-accent-500 text-white ring-4 ring-accent-200 scale-110',
+                  isDone && 'bg-accent-500 text-white',
+                  !isDone && !isCurrent && 'bg-ink-100 text-ink-400',
+                )}
+              >
+                {isDone ? <Check className="w-3.5 h-3.5" strokeWidth={3} /> :
+                 isCurrent ? <cfg.icon className="w-4 h-4" strokeWidth={2.5} /> :
+                 <cfg.icon className="w-4 h-4" strokeWidth={1.75} />}
+              </div>
+              <p className={clsx(
+                'text-2xs font-semibold text-center leading-tight',
+                (isCurrent || isDone) ? 'text-ink-900' : 'text-ink-400',
+              )}>
+                {cfg.label}
+              </p>
+            </div>
+            {i < STATUS_FLOW.length - 1 && (
+              <div className={clsx(
+                'h-0.5 w-3 sm:w-6 mb-5',
+                isDone ? 'bg-accent-500' : 'bg-ink-200',
+              )} />
             )}
           </div>
-        </div>
-      </Modal>
-
-      <UpdateStatusModal
-        open={statusModal}
-        order={order}
-        onClose={() => setStatusModal(false)}
-        onSaved={() => { setStatusModal(false); onChange(); }}
-      />
-      <CancelOrderModal
-        open={cancelModal}
-        order={order}
-        onClose={() => setCancelModal(false)}
-        onSaved={() => { setCancelModal(false); onChange(); }}
-      />
-    </>
-  );
-}
-
-function UpdateStatusModal({ open, order, onClose, onSaved }: { open: boolean; order: Order; onClose: () => void; onSaved: () => void }) {
-  const validNext: Record<string, string[]> = {
-    PENDING: ['CONFIRMED', 'CANCELLED'],
-    CONFIRMED: ['PROCESSING', 'CANCELLED'],
-    PROCESSING: ['SHIPPED', 'CANCELLED'],
-    SHIPPED: ['OUT_FOR_DELIVERY', 'DELIVERED', 'RETURNED'],
-    OUT_FOR_DELIVERY: ['DELIVERED', 'RETURNED'],
-    DELIVERED: ['REFUNDED', 'RETURNED'],
-    RETURNED: ['REFUNDED'],
-  };
-  const [status, setStatus] = useState('');
-  const [message, setMessage] = useState('');
-  const [trackingNumber, setTrackingNumber] = useState('');
-  const [carrier, setCarrier] = useState('');
-  const [saving, setSaving] = useState(false);
-
-  useEffect(() => {
-    if (open && order) {
-      setTrackingNumber(order.trackingNumber || '');
-      setCarrier(order.carrier || '');
-      setMessage('');
-    }
-  }, [open, order]);
-
-  const options = validNext[order.status] || [];
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!status) { toast.error('Select a status'); return; }
-    setSaving(true);
-    try {
-      await orderService.updateStatus(order.id, { status, message, trackingNumber: trackingNumber || undefined, carrier: carrier || undefined });
-      toast.success('Status updated');
-      onSaved();
-    } catch (err: any) { toast.error(err.response?.data?.error?.message || 'Failed'); }
-    finally { setSaving(false); }
-  };
-
-  return (
-    <Modal open={open} onClose={onClose} title="Update Order Status" footer={
-      <>
-        <button onClick={onClose} className="btn-secondary">Cancel</button>
-        <button form="status-form" type="submit" disabled={saving || !status} className="btn-primary">{saving ? 'Saving...' : 'Update'}</button>
-      </>
-    }>
-      <form id="status-form" onSubmit={handleSubmit} className="space-y-3">
-        <div>
-          <label className="block text-sm font-medium text-secondary-700 mb-1.5">New Status *</label>
-          <select required value={status} onChange={(e) => setStatus(e.target.value)} className="input">
-            <option value="">Select status</option>
-            {options.map((s) => <option key={s} value={s}>{s}</option>)}
-          </select>
-        </div>
-        {(status === 'SHIPPED' || status === 'OUT_FOR_DELIVERY') && (
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-sm font-medium text-secondary-700 mb-1.5">Tracking #</label>
-              <input value={trackingNumber} onChange={(e) => setTrackingNumber(e.target.value)} className="input" />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-secondary-700 mb-1.5">Carrier</label>
-              <input value={carrier} onChange={(e) => setCarrier(e.target.value)} className="input" placeholder="e.g. FedEx" />
-            </div>
+        );
+      })}
+      {isCancelled && (
+        <div className="flex items-center gap-1 ml-2">
+          <div className="w-8 h-8 rounded-full bg-danger-500 text-white flex items-center justify-center">
+            <Ban className="w-4 h-4" />
           </div>
-        )}
-        <div>
-          <label className="block text-sm font-medium text-secondary-700 mb-1.5">Note (optional)</label>
-          <textarea value={message} onChange={(e) => setMessage(e.target.value)} className="input" rows={2} />
+          <p className="text-2xs font-semibold text-danger-700">{STATUS_MAP[currentStatus as OrderStatus]?.label}</p>
         </div>
-      </form>
-    </Modal>
+      )}
+    </div>
   );
 }
 
-function CancelOrderModal({ open, order, onClose, onSaved }: { open: boolean; order: Order; onClose: () => void; onSaved: () => void }) {
-  const [reason, setReason] = useState('');
-  const [restoreStock, setRestoreStock] = useState(true);
-  const [refund, setRefund] = useState(false);
-  const [saving, setSaving] = useState(false);
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (reason.length < 3) { toast.error('Reason is required'); return; }
-    setSaving(true);
-    try {
-      await orderService.cancel(order.id, { reason, restoreStock, refund });
-      toast.success('Order cancelled');
-      onSaved();
-    } catch (err: any) { toast.error(err.response?.data?.error?.message || 'Failed'); }
-    finally { setSaving(false); }
-  };
+// ─── Status change modal ────────────────────────────────────
+function StatusChangeModal({ order, onClose, onConfirm }: { order: Order | null; onClose: () => void; onConfirm: (o: Order, s: OrderStatus) => void }) {
+  const [selectedStatus, setSelectedStatus] = useState<OrderStatus | null>(null);
+  useEffect(() => {
+    if (order) setSelectedStatus(order.status as OrderStatus);
+  }, [order?.id]);
+  if (!order) return null;
 
   return (
-    <Modal open={open} onClose={onClose} title="Cancel Order" footer={
-      <>
-        <button onClick={onClose} className="btn-secondary">Keep Order</button>
-        <button form="cancel-form" type="submit" disabled={saving} className="btn-danger">{saving ? 'Cancelling...' : 'Cancel Order'}</button>
-      </>
-    }>
-      <form id="cancel-form" onSubmit={handleSubmit} className="space-y-3">
-        <div>
-          <label className="block text-sm font-medium text-secondary-700 mb-1.5">Reason *</label>
-          <textarea required minLength={3} value={reason} onChange={(e) => setReason(e.target.value)} className="input" rows={3} placeholder="Why is this order being cancelled?" />
-        </div>
-        <div className="space-y-2">
-          <label className="flex items-center gap-2">
-            <input type="checkbox" checked={restoreStock} onChange={(e) => setRestoreStock(e.target.checked)} className="w-4 h-4 text-primary border-secondary-300 rounded" />
-            <span className="text-sm text-secondary-700">Restore stock to inventory</span>
-          </label>
-          <label className="flex items-center gap-2">
-            <input type="checkbox" checked={refund} onChange={(e) => setRefund(e.target.checked)} className="w-4 h-4 text-primary border-secondary-300 rounded" />
-            <span className="text-sm text-secondary-700">Mark payment as refunded</span>
-          </label>
-        </div>
-      </form>
+    <Modal
+      open={!!order}
+      onClose={onClose}
+      title={`Update Status: ${order.orderNumber}`}
+      size="md"
+      footer={
+        <>
+          <Button variant="ghost" onClick={onClose}>Cancel</Button>
+          <Button
+            variant="primary"
+            disabled={!selectedStatus || selectedStatus === order.status}
+            onClick={() => onConfirm(order, selectedStatus!)}
+            leftIcon={Check}
+          >
+            Update Status
+          </Button>
+        </>
+      }
+    >
+      <div className="space-y-2">
+        <p className="text-sm text-ink-600 mb-3">Current status: <Badge variant={STATUS_MAP[order.status].variant} dot>{STATUS_MAP[order.status].label}</Badge></p>
+        {STATUS_FLOW.concat(['CANCELLED', 'REFUNDED', 'RETURNED'] as OrderStatus[]).map((s) => {
+          const cfg = STATUS_MAP[s];
+          const isSelected = selectedStatus === s;
+          return (
+            <button
+              key={s}
+              onClick={() => setSelectedStatus(s)}
+              className={clsx(
+                'w-full flex items-center gap-3 p-3 rounded-xl border-2 transition-all text-left',
+                isSelected ? 'border-accent-500 bg-accent-50/50' : 'border-ink-200 hover:border-ink-300',
+                s === order.status && 'opacity-50',
+              )}
+            >
+              <div className={clsx('w-9 h-9 rounded-xl flex items-center justify-center', cfg.bg, cfg.color)}>
+                <cfg.icon className="w-4 h-4" strokeWidth={2.25} />
+              </div>
+              <div className="flex-1">
+                <p className="font-semibold text-sm text-ink-900">{cfg.label}</p>
+                <p className="text-2xs text-ink-500">
+                  {s === 'PENDING' && 'Order placed, awaiting confirmation'}
+                  {s === 'CONFIRMED' && 'Order confirmed, ready to process'}
+                  {s === 'PROCESSING' && 'Being packed and prepared'}
+                  {s === 'SHIPPED' && 'Handed over to carrier'}
+                  {s === 'OUT_FOR_DELIVERY' && 'Out for delivery to customer'}
+                  {s === 'DELIVERED' && 'Successfully delivered'}
+                  {s === 'CANCELLED' && 'Order cancelled by customer or admin'}
+                  {s === 'REFUNDED' && 'Payment refunded to customer'}
+                  {s === 'RETURNED' && 'Customer returned the product'}
+                </p>
+              </div>
+              {isSelected && <Check className="w-4 h-4 text-accent-600" strokeWidth={3} />}
+            </button>
+          );
+        })}
+      </div>
     </Modal>
   );
 }
+
+// Avoid unused warnings
+void Activity;
+void ArrowUpRight;
+void Filter;
+void RefreshCcw;
+void Send;
+void CreditCard;
+void Pause;
+void Play;
+void ArrowRight;
+void Plus;
+void ChevronDown;
