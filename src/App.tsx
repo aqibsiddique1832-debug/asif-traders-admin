@@ -25,6 +25,9 @@ import Notifications from './pages/Notifications';
 import Inventory from './pages/Inventory';
 import Pincodes from './pages/Pincodes';
 import Settings from './pages/Settings';
+import Users from './pages/Users';
+import RolesPermissions from './pages/RolesPermissions';
+import { NotFoundPage, ServerErrorPage, NetworkErrorPage, SessionExpiredPage, PermissionDeniedPage } from './pages/ErrorPages';
 
 function App() {
   return (
@@ -66,7 +69,9 @@ function App() {
             <Route path="marketing" element={<Marketing />} />
             <Route path="notifications" element={<Notifications />} />
             <Route path="settings" element={<Settings />} />
-            <Route path="*" element={<Navigate to="/" replace />} />
+            <Route path="users" element={<Users />} />
+            <Route path="roles" element={<RolesPermissions />} />
+            <Route path="*" element={<NotFoundPage />} />
           </Route>
         </Routes>
       </AuthProvider>
