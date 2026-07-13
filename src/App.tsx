@@ -17,6 +17,7 @@ import MediaLibrary from './pages/MediaLibrary';
 import Quotes from './pages/Quotes';
 import Orders from './pages/Orders';
 import Customers from './pages/Customers';
+import Reviews from './pages/Reviews';
 import Inventory from './pages/Inventory';
 import Pincodes from './pages/Pincodes';
 import Settings from './pages/Settings';
@@ -53,6 +54,7 @@ function App() {
             <Route path="quotes" element={<Quotes />} />
             <Route path="orders" element={<Orders />} />
             <Route path="customers" element={<Customers />} />
+            <Route path="reviews" element={<Reviews />} />
             <Route path="inventory" element={<Inventory />} />
             <Route path="pincodes" element={<Pincodes />} />
             <Route path="settings" element={<Settings />} />

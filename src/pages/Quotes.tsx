@@ -1,594 +1,654 @@
 // ────────────────────────────────────────────────────────────
-// Quotes — List + Filters + Details (CRUD + Approve/Reject/Price/Convert)
+// Premium Quotes — Part 2B-2
+// 9-stage workflow · KPIs · detail drawer · convert to order
 // ────────────────────────────────────────────────────────────
 
 import { useEffect, useState } from 'react';
-import { quoteService, orderService } from '../lib/services';
-import { Modal, FullPageLoader, EmptyState, Pagination } from '../components/ui/StatCard';
 import {
-  Search, Filter, ChevronDown, FileText, Eye, Edit2, Printer,
-  CheckCircle, XCircle, DollarSign, ShoppingBag, Phone, Mail, MapPin, Calendar, User as UserIcon
+  FileText, Search, Download, MoreVertical, X, Edit, Eye,
+  Send, Check, XCircle, Clock, ChevronRight, ChevronDown,
+  Calendar, User as UserIcon, Mail, Phone, MapPin, Package,
+  DollarSign, Truck, ArrowRight, FileCheck, AlertCircle,
+  CheckCircle2, RefreshCcw, Plus, ShoppingCart, Hash,
 } from 'lucide-react';
-import { Link } from 'react-router-dom';
-import { formatCurrency, formatDate, formatDateTime, getStatusColor, relativeTime } from '../lib/auth';
-import type { Quote, Order } from '../types';
-import toast from 'react-hot-toast';
 import clsx from 'clsx';
+import { Link } from 'react-router-dom';
+import toast from 'react-hot-toast';
+import {
+  Card, CardHeader, CardBody, Button, Badge, PageHeader, EmptyState,
+  Skeleton, Modal, ConfirmDialog, Pagination, Tabs,
+} from '../components/ui/StatCard';
+import { quoteService } from '../lib/services';
+import { formatCurrency, formatDate, relativeTime } from '../lib/auth';
+import type { Quote } from '../types';
+
+// ─── 9-stage workflow ──────────────────────────────────────
+type QuoteStatus = 'DRAFT' | 'SUBMITTED' | 'REVIEWED' | 'QUOTED' | 'ACCEPTED' | 'REJECTED' | 'EXPIRED' | 'CONVERTED';
+
+const STATUS_FLOW: QuoteStatus[] = ['DRAFT', 'SUBMITTED', 'REVIEWED', 'QUOTED', 'ACCEPTED', 'CONVERTED'];
+
+const STATUS_MAP: Record<QuoteStatus, { label: string; variant: any; color: string; bg: string; icon: any; step: number }> = {
+  DRAFT:     { label: 'Draft',     variant: 'ink',     color: 'text-ink-700',     bg: 'bg-ink-100',     icon: Edit,         step: 0 },
+  SUBMITTED: { label: 'Submitted', variant: 'info',    color: 'text-info-700',    bg: 'bg-info-subtle', icon: Send,         step: 1 },
+  REVIEWED:  { label: 'Reviewed',  variant: 'info',    color: 'text-info-700',    bg: 'bg-info-subtle', icon: Eye,          step: 2 },
+  QUOTED:    { label: 'Quoted',    variant: 'accent',  color: 'text-accent-700',  bg: 'bg-accent-50',   icon: FileText,     step: 3 },
+  ACCEPTED:  { label: 'Accepted',  variant: 'success', color: 'text-success-700', bg: 'bg-success-subtle', icon: CheckCircle2, step: 4 },
+  REJECTED:  { label: 'Rejected',  variant: 'danger',  color: 'text-danger-700',  bg: 'bg-danger-subtle', icon: XCircle,    step: -1 },
+  EXPIRED:   { label: 'Expired',   variant: 'warning', color: 'text-warning-700', bg: 'bg-warning-subtle', icon: Clock,     step: -1 },
+  CONVERTED: { label: 'Converted', variant: 'success', color: 'text-success-700', bg: 'bg-success-subtle', icon: ShoppingCart, step: 5 },
+};
 
 export default function Quotes() {
   const [data, setData] = useState<Quote[]>([]);
-  const [pagination, setPagination] = useState({ page: 1, limit: 20, total: 0, totalPages: 1 });
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
-  const [statusFilter, setStatusFilter] = useState('');
-  const [showFilters, setShowFilters] = useState(false);
-  const [selected, setSelected] = useState<Quote | null>(null);
-  const [stats, setStats] = useState<Record<string, number>>({});
+  const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
+  const [pageSize] = useState(20);
+  const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [stats, setStats] = useState<{ total: number; byStatus: Record<string, number> }>({ total: 0, byStatus: {} });
 
-  const load = async (page = 1) => {
-    setLoading(true);
+  const [detail, setDetail] = useState<Quote | null>(null);
+  const [statusModal, setStatusModal] = useState<Quote | null>(null);
+  const [convertConfirm, setConvertConfirm] = useState<Quote | null>(null);
+
+  useEffect(() => {
+    loadStats();
+  }, []);
+
+  useEffect(() => {
+    load();
+  }, [page, statusFilter, search]);
+
+  const loadStats = async () => {
     try {
-      const params: any = { page, limit: 20, sortBy: 'createdAt', sortOrder: 'desc' };
+      const res = await quoteService.stats();
+      setStats(res);
+    } catch (err) {}
+  };
+
+  const load = async () => {
+    try {
+      setLoading(true);
+      const params: any = { page, limit: pageSize };
       if (search) params.search = search;
-      if (statusFilter) params.status = statusFilter;
+      if (statusFilter !== 'all') params.status = statusFilter;
       const res = await quoteService.list(params);
-      setData(res.data);
-      setPagination(res.pagination);
-    } catch {} finally {
+      setData((res as any).data || []);
+      const total = (res as any).total ?? (res as any).pagination?.total ?? 0;
+      const totalPages = (res as any).totalPages ?? (res as any).pagination?.totalPages ?? 1;
+      setTotal(total);
+      setTotalPages(totalPages);
+    } catch (err) {
+      toast.error('Failed to load quotes');
+    } finally {
       setLoading(false);
     }
   };
 
-  useEffect(() => {
-    load();
-    quoteService.stats().then((s) => setStats(s.byStatus)).catch(() => {});
-  }, []);
-
-  const handleSearch = (e: React.FormEvent) => {
-    e.preventDefault();
-    load(1);
+  const handleStatusChange = async (quote: Quote, newStatus: string) => {
+    try {
+      await quoteService.changeStatus(quote.id, newStatus);
+      toast.success(`Quote updated to ${STATUS_MAP[newStatus as QuoteStatus]?.label || newStatus}`);
+      load();
+      loadStats();
+      setStatusModal(null);
+    } catch (err: any) {
+      toast.error(err.response?.data?.error?.message || 'Update failed');
+    }
   };
 
-  const clearFilters = () => { setSearch(''); setStatusFilter(''); setTimeout(() => load(1), 0); };
+  const handleConvert = async (quote: Quote) => {
+    try {
+      const order = await quoteService.convertToOrder(quote.id) as any;
+      toast.success(`Quote converted to order ${order.orderNumber || ''}`);
+      setConvertConfirm(null);
+      setDetail(null);
+      load();
+    } catch (err: any) {
+      toast.error(err.response?.data?.error?.message || 'Conversion failed');
+    }
+  };
+
+  const kpis = [
+    { label: 'Total Quotes',   value: stats.total,                                         icon: FileText,     accent: 'info' as const },
+    { label: 'Submitted',      value: stats.byStatus.SUBMITTED || 0,                       icon: Send,         accent: 'info' as const },
+    { label: 'Quoted',         value: stats.byStatus.QUOTED || 0,                          icon: FileText,     accent: 'accent' as const },
+    { label: 'Accepted',       value: stats.byStatus.ACCEPTED || 0,                        icon: CheckCircle2, accent: 'success' as const },
+    { label: 'Converted',      value: stats.byStatus.CONVERTED || 0,                       icon: ShoppingCart, accent: 'success' as const },
+    { label: 'Rejected',       value: stats.byStatus.REJECTED || 0,                        icon: XCircle,      accent: 'danger' as const },
+    { label: 'Pending Review', value: stats.byStatus.DRAFT || 0,                           icon: Clock,        accent: 'warning' as const },
+  ];
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-bold text-secondary-900">Quotes</h1>
-          <p className="text-sm text-secondary-500 mt-1">{pagination.total} quotes</p>
-        </div>
+    <div className="space-y-6 animate-fade-in pb-24">
+      <PageHeader
+        title="Quotes"
+        description={`${total} quotes · ${stats.byStatus.SUBMITTED || 0} awaiting response`}
+        breadcrumbs={[{ label: 'Sales' }, { label: 'Quotes' }]}
+        actions={
+          <>
+            <Button variant="secondary" leftIcon={Download}>Export</Button>
+            <Button variant="primary" leftIcon={Plus} disabled>
+              New Quote
+            </Button>
+          </>
+        }
+      />
+
+      {/* ─── 7 KPI cards ─────────────────────────────────── */}
+      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3">
+        {kpis.map((k) => <MiniStat key={k.label} {...k} />)}
       </div>
 
-      {/* Status filter pills */}
-      <div className="flex flex-wrap gap-2">
-        <button
-          onClick={() => { setStatusFilter(''); setTimeout(() => load(1), 0); }}
-          className={clsx('btn btn-sm', !statusFilter ? 'btn-primary' : 'btn-secondary')}
-        >
-          All ({Object.values(stats).reduce((a, b) => a + b, 0)})
-        </button>
-        {['SUBMITTED', 'REVIEWED', 'QUOTED', 'ACCEPTED', 'REJECTED', 'EXPIRED', 'CONVERTED'].map((s) => (
-          <button
-            key={s}
-            onClick={() => { setStatusFilter(s); setTimeout(() => load(1), 0); }}
-            className={clsx('btn btn-sm', statusFilter === s ? 'btn-primary' : 'btn-secondary')}
-          >
-            {s} ({stats[s] || 0})
-          </button>
-        ))}
-      </div>
+      {/* ─── Tabs ────────────────────────────────────────── */}
+      <Tabs
+        active={statusFilter}
+        onChange={(v) => { setStatusFilter(v); setPage(1); }}
+        tabs={[
+          { value: 'all',         label: 'All',         count: total },
+          { value: 'DRAFT',      label: 'Draft',       count: stats.byStatus.DRAFT || 0 },
+          { value: 'SUBMITTED',  label: 'Submitted',   count: stats.byStatus.SUBMITTED || 0 },
+          { value: 'QUOTED',     label: 'Quoted',      count: stats.byStatus.QUOTED || 0 },
+          { value: 'ACCEPTED',   label: 'Accepted',    count: stats.byStatus.ACCEPTED || 0 },
+          { value: 'CONVERTED',  label: 'Converted',   count: stats.byStatus.CONVERTED || 0 },
+          { value: 'REJECTED',   label: 'Rejected',    count: stats.byStatus.REJECTED || 0 },
+        ]}
+      />
 
-      <div className="card p-4">
-        <form onSubmit={handleSearch} className="flex flex-col sm:flex-row gap-2">
-          <div className="relative flex-1">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-secondary-400" />
+      {/* ─── Toolbar ─────────────────────────────────────── */}
+      <Card>
+        <div className="p-3 sm:p-4 flex flex-col sm:flex-row sm:items-center gap-3">
+          <div className="relative flex-1 max-w-md">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-ink-400 pointer-events-none" />
             <input
+              type="search"
               value={search}
-              onChange={(e) => setSearch(e.target.value)}
+              onChange={(e) => { setSearch(e.target.value); setPage(1); }}
+              placeholder="Search by quote #, name, subject…"
               className="input pl-10"
-              placeholder="Search by number, name, email, phone, subject..."
             />
           </div>
-          <button type="submit" className="btn-primary">Search</button>
-        </form>
-      </div>
+        </div>
+      </Card>
 
-      <div className="card overflow-hidden">
-        {loading ? (
-          <FullPageLoader />
-        ) : data.length === 0 ? (
+      {/* ─── Table ───────────────────────────────────────── */}
+      {loading ? (
+        <Card>
+          <div className="p-4 space-y-2">
+            {Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-12 w-full" />)}
+          </div>
+        </Card>
+      ) : data.length === 0 ? (
+        <Card>
           <EmptyState
-            title="No quotes found"
-            description="Quotes submitted from the website will appear here"
             icon={FileText}
+            title="No quotes found"
+            description={search ? 'Try a different search term' : 'Customer quote requests will appear here.'}
           />
-        ) : (
-          <>
-            <div className="hidden md:block overflow-x-auto">
-              <table className="w-full">
-                <thead className="bg-secondary-50 border-b border-secondary-200">
-                  <tr>
-                    <th className="text-left text-xs font-semibold text-secondary-600 px-4 py-3">Quote #</th>
-                    <th className="text-left text-xs font-semibold text-secondary-600 px-4 py-3">Customer</th>
-                    <th className="text-left text-xs font-semibold text-secondary-600 px-4 py-3">Subject</th>
-                    <th className="text-left text-xs font-semibold text-secondary-600 px-4 py-3">Items</th>
-                    <th className="text-left text-xs font-semibold text-secondary-600 px-4 py-3">Total</th>
-                    <th className="text-left text-xs font-semibold text-secondary-600 px-4 py-3">Status</th>
-                    <th className="text-left text-xs font-semibold text-secondary-600 px-4 py-3">Created</th>
-                    <th className="text-right text-xs font-semibold text-secondary-600 px-4 py-3">Actions</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-secondary-200">
-                  {data.map((q) => (
-                    <tr key={q.id} className="table-row">
-                      <td className="px-4 py-3 font-mono text-sm text-secondary-900">{q.quoteNumber}</td>
+        </Card>
+      ) : (
+        <Card className="overflow-hidden">
+          <div className="overflow-x-auto scroll-thin">
+            <table className="w-full text-sm">
+              <thead className="bg-ink-50/80 border-b border-ink-200">
+                <tr>
+                  <th className="px-4 py-3 text-left text-2xs font-bold text-ink-500 uppercase tracking-wider">Quote #</th>
+                  <th className="px-4 py-3 text-left text-2xs font-bold text-ink-500 uppercase tracking-wider">Date</th>
+                  <th className="px-4 py-3 text-left text-2xs font-bold text-ink-500 uppercase tracking-wider">Customer</th>
+                  <th className="px-4 py-3 text-left text-2xs font-bold text-ink-500 uppercase tracking-wider">Subject</th>
+                  <th className="px-4 py-3 text-right text-2xs font-bold text-ink-500 uppercase tracking-wider">Qty</th>
+                  <th className="px-4 py-3 text-left text-2xs font-bold text-ink-500 uppercase tracking-wider">Budget</th>
+                  <th className="px-4 py-3 text-right text-2xs font-bold text-ink-500 uppercase tracking-wider">Total</th>
+                  <th className="px-4 py-3 text-left text-2xs font-bold text-ink-500 uppercase tracking-wider">Status</th>
+                  <th className="px-4 py-3 text-left text-2xs font-bold text-ink-500 uppercase tracking-wider">Workflow</th>
+                  <th className="w-10 px-4 py-3"></th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-ink-100">
+                {data.map((q) => {
+                  const status = STATUS_MAP[q.status] || STATUS_MAP.DRAFT;
+                  const min = q.budgetMin ? parseFloat(q.budgetMin) : 0;
+                  const max = q.budgetMax ? parseFloat(q.budgetMax) : 0;
+                  const final = q.finalTotal ? parseFloat(q.finalTotal) : 0;
+                  return (
+                    <tr
+                      key={q.id}
+                      className="hover:bg-ink-50/60 transition-colors cursor-pointer"
+                      onClick={() => setDetail(q)}
+                    >
                       <td className="px-4 py-3">
-                        <div className="text-sm font-medium text-secondary-900">{q.name}</div>
-                        <div className="text-xs text-secondary-500">{q.email}</div>
-                      </td>
-                      <td className="px-4 py-3 text-sm text-secondary-700 max-w-xs truncate">{q.subject}</td>
-                      <td className="px-4 py-3 text-sm text-secondary-600">{q._count?.items ?? q.items.length}</td>
-                      <td className="px-4 py-3 text-sm font-medium text-secondary-900">
-                        {q.finalTotal ? formatCurrency(q.finalTotal) : <span className="text-secondary-400">—</span>}
+                        <p className="font-mono font-semibold text-ink-900">{q.quoteNumber}</p>
                       </td>
                       <td className="px-4 py-3">
-                        <span className={getStatusColor(q.status)}>{q.status}</span>
+                        <p className="text-ink-700 text-xs">{formatDate(q.createdAt)}</p>
+                        <p className="text-2xs text-ink-500">{relativeTime(q.createdAt)}</p>
                       </td>
-                      <td className="px-4 py-3 text-sm text-secondary-500">{relativeTime(q.createdAt)}</td>
+                      <td className="px-4 py-3">
+                        <p className="font-semibold text-ink-900 text-sm truncate max-w-[140px]">{q.name}</p>
+                        {q.company && <p className="text-2xs text-ink-500 truncate max-w-[140px]">{q.company}</p>}
+                      </td>
+                      <td className="px-4 py-3">
+                        <p className="text-ink-700 text-sm truncate max-w-[200px]">{q.subject}</p>
+                      </td>
                       <td className="px-4 py-3 text-right">
-                        <button
-                          onClick={() => setSelected(q)}
-                          className="btn btn-secondary btn-sm"
-                        >
-                          <Eye className="w-3 h-3" /> View
+                        <span className="font-semibold text-ink-900 tabular-nums">{q.quantityNeeded || '—'}</span>
+                      </td>
+                      <td className="px-4 py-3">
+                        {min > 0 || max > 0 ? (
+                          <p className="text-xs text-ink-700 tabular-nums">
+                            {formatCurrency(min)} – {formatCurrency(max)}
+                          </p>
+                        ) : <span className="text-ink-400 text-xs">—</span>}
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        {final > 0 ? (
+                          <p className="font-bold text-ink-900 tabular-nums">{formatCurrency(final)}</p>
+                        ) : <span className="text-ink-400 text-xs">—</span>}
+                      </td>
+                      <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
+                        <button onClick={() => setStatusModal(q)}>
+                          <Badge variant={status.variant} dot>{status.label}</Badge>
                         </button>
                       </td>
+                      <td className="px-4 py-3 min-w-[140px]">
+                        <WorkflowProgress status={q.status} />
+                      </td>
+                      <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
+                        <ChevronRight className="w-4 h-4 text-ink-400" />
+                      </td>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      )}
 
-            {/* Mobile cards */}
-            <div className="md:hidden divide-y divide-secondary-200">
-              {data.map((q) => (
-                <button
-                  key={q.id}
-                  onClick={() => setSelected(q)}
-                  className="w-full text-left p-4 hover:bg-secondary-50"
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="font-mono text-xs text-secondary-500">{q.quoteNumber}</div>
-                    <span className={getStatusColor(q.status)}>{q.status}</span>
-                  </div>
-                  <div className="font-medium text-secondary-900 mt-1">{q.name}</div>
-                  <div className="text-sm text-secondary-600 truncate">{q.subject}</div>
-                  <div className="flex items-center justify-between mt-2 text-sm">
-                    <span className="text-secondary-500">{q._count?.items ?? q.items.length} items</span>
-                    <span className="font-semibold">{q.finalTotal ? formatCurrency(q.finalTotal) : 'No price yet'}</span>
-                  </div>
-                </button>
-              ))}
-            </div>
+      {/* ─── Pagination ──────────────────────────────────── */}
+      {!loading && data.length > 0 && (
+        <Card>
+          <Pagination page={page} totalPages={totalPages} total={total} limit={pageSize} onPageChange={setPage} />
+        </Card>
+      )}
 
-            <div className="p-4 border-t border-secondary-200">
-              <Pagination
-                page={pagination.page}
-                totalPages={pagination.totalPages}
-                total={pagination.total}
-                limit={pagination.limit}
-                onPageChange={(p) => load(p)}
-              />
-            </div>
-          </>
-        )}
-      </div>
+      {/* ─── Detail drawer ───────────────────────────────── */}
+      <QuoteDetailDrawer
+        quote={detail}
+        onClose={() => setDetail(null)}
+        onStatusChange={setStatusModal}
+        onConvert={setConvertConfirm}
+      />
 
-      <QuoteDetailsModal
-        quote={selected}
-        onClose={() => setSelected(null)}
-        onChange={() => { setSelected(null); load(pagination.page); }}
+      {/* ─── Status change modal ─────────────────────────── */}
+      <StatusChangeModal quote={statusModal} onClose={() => setStatusModal(null)} onConfirm={handleStatusChange} />
+
+      {/* ─── Convert confirm ─────────────────────────────── */}
+      <ConfirmDialog
+        open={!!convertConfirm}
+        onClose={() => setConvertConfirm(null)}
+        onConfirm={() => convertConfirm && handleConvert(convertConfirm)}
+        title="Convert to Order?"
+        description={`Quote ${convertConfirm?.quoteNumber} will be converted to a new order. The quote will be marked as CONVERTED.`}
+        confirmText="Convert"
       />
     </div>
   );
 }
 
-function QuoteDetailsModal({ quote, onClose, onChange }: { quote: Quote | null; onClose: () => void; onChange: () => void }) {
-  const [priceModal, setPriceModal] = useState(false);
-  const [notesModal, setNotesModal] = useState(false);
-  const [actionLoading, setActionLoading] = useState(false);
-  const [refreshed, setRefreshed] = useState<Quote | null>(null);
-  const [orderCreated, setOrderCreated] = useState<Order | null>(null);
-
-  const q = refreshed || quote;
-
-  if (!q) return null;
-
-  const handleApprove = async () => {
-    if (!confirm('Mark this quote as reviewed?')) return;
-    setActionLoading(true);
-    try {
-      await quoteService.changeStatus(q.id, 'REVIEWED');
-      toast.success('Quote marked as reviewed');
-      onChange();
-    } catch {} finally { setActionLoading(false); }
+// ─── Mini stat ──────────────────────────────────────────────
+function MiniStat({ label, value, icon: Icon, accent }: any) {
+  const map: any = {
+    info:    'bg-info-subtle text-info-600',
+    success: 'bg-success-subtle text-success-600',
+    warning: 'bg-warning-subtle text-warning-600',
+    danger:  'bg-danger-subtle text-danger-600',
+    accent:  'bg-accent-50 text-accent-600',
+    ink:     'bg-ink-100 text-ink-600',
   };
+  return (
+    <div className="card-hover p-3 sm:p-4 flex items-center gap-2.5">
+      <div className={clsx('w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0', map[accent])}>
+        <Icon className="w-4 h-4" strokeWidth={2.25} />
+      </div>
+      <div className="min-w-0">
+        <p className="text-2xs text-ink-500 truncate">{label}</p>
+        <p className="text-base font-bold text-ink-900 tabular-nums">{value}</p>
+      </div>
+    </div>
+  );
+}
 
-  const handleReject = async () => {
-    const reason = prompt('Reason for rejection:');
-    if (!reason) return;
-    setActionLoading(true);
-    try {
-      await quoteService.changeStatus(q.id, 'REJECTED', reason);
-      toast.success('Quote rejected');
-      onChange();
-    } catch {} finally { setActionLoading(false); }
-  };
+// ─── Workflow progress mini-bar ─────────────────────────────
+function WorkflowProgress({ status }: { status: string }) {
+  const step = STATUS_MAP[status as QuoteStatus]?.step ?? -1;
+  if (step === -1) return <span className="text-2xs text-ink-500 italic">{STATUS_MAP[status as QuoteStatus]?.label || status}</span>;
+  return (
+    <div className="flex items-center gap-0.5">
+      {STATUS_FLOW.map((_, i) => (
+        <div
+          key={i}
+          className={clsx('h-1.5 flex-1 rounded-pill', i <= step ? 'bg-accent-500' : 'bg-ink-200')}
+        />
+      ))}
+    </div>
+  );
+}
 
-  const handleConvert = async () => {
-    if (!confirm('Convert this quote to an order? This will create an order and decrement stock.')) return;
-    setActionLoading(true);
-    try {
-      const order = await quoteService.convertToOrder(q.id);
-      setOrderCreated(order);
-      toast.success('Order created: ' + order.orderNumber);
-      onChange();
-    } catch (err: any) {
-      toast.error(err.response?.data?.error?.message || 'Failed to convert');
-    } finally { setActionLoading(false); }
-  };
+// ─── Quote detail drawer ───────────────────────────────────
+function QuoteDetailDrawer({ quote, onClose, onStatusChange, onConvert }: {
+  quote: Quote | null;
+  onClose: () => void;
+  onStatusChange: (q: Quote) => void;
+  onConvert: (q: Quote) => void;
+}) {
+  if (!quote) return null;
+  const status = STATUS_MAP[quote.status] || STATUS_MAP.DRAFT;
+  const min = quote.budgetMin ? parseFloat(quote.budgetMin) : 0;
+  const max = quote.budgetMax ? parseFloat(quote.budgetMax) : 0;
+  const subtotal = quote.finalSubtotal ? parseFloat(quote.finalSubtotal) : 0;
+  const tax = quote.finalTaxAmount ? parseFloat(quote.finalTaxAmount) : 0;
+  const shipping = quote.finalShippingAmount ? parseFloat(quote.finalShippingAmount) : 0;
+  const total = quote.finalTotal ? parseFloat(quote.finalTotal) : 0;
 
   return (
-    <>
-      <Modal
-        open={!!quote}
-        onClose={onClose}
-        title={
-          <div className="flex items-center gap-2 flex-wrap">
-            <span>Quote {q.quoteNumber}</span>
-            <span className={getStatusColor(q.status)}>{q.status}</span>
-          </div>
-        }
-        size="2xl"
-        footer={
-          <div className="flex flex-wrap gap-2 w-full sm:w-auto">
-            <button onClick={() => window.print()} className="btn-secondary btn-sm">
-              <Printer className="w-4 h-4" /> Print
-            </button>
-            {q.status === 'SUBMITTED' && (
-              <>
-                <button onClick={handleApprove} disabled={actionLoading} className="btn-secondary btn-sm">
-                  <CheckCircle className="w-4 h-4" /> Mark Reviewed
-                </button>
-                <button onClick={handleReject} disabled={actionLoading} className="btn-danger btn-sm">
-                  <XCircle className="w-4 h-4" /> Reject
-                </button>
-              </>
-            )}
-            {(q.status === 'REVIEWED' || (q.status === 'SUBMITTED' && !q.finalTotal)) && (
-              <button onClick={() => setPriceModal(true)} className="btn-primary btn-sm">
-                <DollarSign className="w-4 h-4" /> Set Final Price
-              </button>
-            )}
-            {q.status === 'QUOTED' && q.finalTotal && (
-              <button onClick={handleConvert} disabled={actionLoading} className="btn-primary btn-sm">
-                <ShoppingBag className="w-4 h-4" /> Convert to Order
-              </button>
-            )}
-            <button onClick={() => setNotesModal(true)} className="btn-secondary btn-sm">
-              <Edit2 className="w-4 h-4" /> Notes
-            </button>
-          </div>
-        }
+    <div className="fixed inset-0 z-50 animate-fade-in">
+      <div className="absolute inset-0 bg-ink-900/40 backdrop-blur-sm" onClick={onClose} />
+      <div
+        className="absolute top-0 right-0 h-full bg-white shadow-modal flex flex-col animate-slide-right"
+        style={{ width: 'min(720px, 100vw)', borderTopLeftRadius: 24, borderBottomLeftRadius: 24 }}
       >
-        <div className="space-y-5 print:text-black">
-          {/* Customer info */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 p-4 bg-secondary-50 rounded-lg">
-            <div>
-              <p className="text-xs text-secondary-500 mb-1">Customer</p>
-              <p className="font-medium text-secondary-900 flex items-center gap-1.5"><UserIcon className="w-3.5 h-3.5" /> {q.name}</p>
-              <p className="text-sm text-secondary-600 flex items-center gap-1.5 mt-1"><Mail className="w-3.5 h-3.5" /> {q.email}</p>
-              <p className="text-sm text-secondary-600 flex items-center gap-1.5 mt-1"><Phone className="w-3.5 h-3.5" /> {q.phone}</p>
+        {/* Header */}
+        <div className="px-6 py-4 border-b border-ink-200 flex-shrink-0">
+          <div className="flex items-center justify-between gap-2">
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2">
+                <p className="text-2xs font-bold text-ink-500 uppercase tracking-wider">Quote</p>
+                <Badge variant={status.variant} dot>{status.label}</Badge>
+              </div>
+              <h2 className="text-lg font-bold text-ink-900 font-mono mt-0.5">{quote.quoteNumber}</h2>
             </div>
-            <div>
-              {q.company && <p className="text-sm text-secondary-700">Company: <span className="font-medium">{q.company}</span></p>}
-              {q.gstin && <p className="text-sm text-secondary-700">GSTIN: <span className="font-mono">{q.gstin}</span></p>}
-              <p className="text-sm text-secondary-500 mt-1">Created: {formatDateTime(q.createdAt)}</p>
-            </div>
+            <button onClick={onClose} className="w-8 h-8 rounded-lg text-ink-500 hover:bg-ink-100 hover:text-ink-900 flex items-center justify-center">
+              <X className="w-4 h-4" />
+            </button>
           </div>
+        </div>
+
+        <div className="flex-1 overflow-y-auto scroll-thin px-6 py-5 space-y-5">
+          {/* Workflow timeline */}
+          <div>
+            <p className="text-2xs font-bold text-ink-500 uppercase tracking-wider mb-3">9-Stage Workflow</p>
+            <WorkflowTimeline status={quote.status} />
+          </div>
+
+          {/* Actions */}
+          <div className="flex flex-wrap gap-2">
+            <Button variant="primary" size="sm" leftIcon={Edit} onClick={() => onStatusChange(quote)}>
+              Update Status
+            </Button>
+            {(quote.status === 'ACCEPTED' || quote.status === 'QUOTED') && (
+            <Button variant="primary" size="sm" leftIcon={ShoppingCart} onClick={() => onConvert(quote)}>
+                Convert to Order
+              </Button>
+            )}
+            <Button variant="secondary" size="sm" leftIcon={Send}>Send to Customer</Button>
+            <Button variant="secondary" size="sm" leftIcon={Download}>Download PDF</Button>
+          </div>
+
+          {/* Customer */}
+          <Card>
+            <CardBody>
+              <p className="text-2xs font-bold text-ink-500 uppercase tracking-wider mb-2">Customer</p>
+              <p className="font-bold text-ink-900 text-base">{quote.name}</p>
+              {quote.company && <p className="text-sm text-ink-700">{quote.company}</p>}
+              <div className="mt-2 space-y-0.5 text-xs text-ink-600">
+                <p className="flex items-center gap-1.5"><Mail className="w-3 h-3" /> {quote.email}</p>
+                <p className="flex items-center gap-1.5"><Phone className="w-3 h-3" /> {quote.phone}</p>
+                {quote.gstin && <p className="flex items-center gap-1.5"><Hash className="w-3 h-3" /> GSTIN: {quote.gstin}</p>}
+              </div>
+            </CardBody>
+          </Card>
 
           {/* Subject + Message */}
-          <div>
-            <h3 className="font-semibold text-secondary-900">{q.subject}</h3>
-            <p className="text-sm text-secondary-600 mt-1 whitespace-pre-wrap">{q.message}</p>
-          </div>
-
-          {/* Items */}
-          <div>
-            <h4 className="text-sm font-semibold text-secondary-700 mb-2">Items ({q.items.length})</h4>
-            <div className="border border-secondary-200 rounded-lg overflow-hidden">
-              <table className="w-full text-sm">
-                <thead className="bg-secondary-50">
-                  <tr>
-                    <th className="text-left px-3 py-2">Product</th>
-                    <th className="text-center px-3 py-2">Qty</th>
-                    <th className="text-right px-3 py-2">Unit Price</th>
-                    <th className="text-right px-3 py-2">Total</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-secondary-200">
-                  {q.items.map((item) => (
-                    <tr key={item.id}>
-                      <td className="px-3 py-2">
-                        <div className="font-medium">{item.productName}</div>
-                        {item.variantName && <div className="text-xs text-secondary-500">{item.variantName}</div>}
-                      </td>
-                      <td className="px-3 py-2 text-center">{item.quantity} {item.unit}</td>
-                      <td className="px-3 py-2 text-right">
-                        {item.finalUnitPrice ? (
-                          <div>
-                            <div className="font-medium">{formatCurrency(item.finalUnitPrice)}</div>
-                            {item.unitPrice && parseFloat(item.unitPrice) !== parseFloat(item.finalUnitPrice) && (
-                              <div className="text-xs text-secondary-400 line-through">{formatCurrency(item.unitPrice)}</div>
-                            )}
-                          </div>
-                        ) : (
-                          <span className="text-secondary-400">{item.unitPrice ? formatCurrency(item.unitPrice) : '—'}</span>
-                        )}
-                      </td>
-                      <td className="px-3 py-2 text-right font-medium">
-                        {item.finalTotalPrice ? formatCurrency(item.finalTotalPrice) :
-                          item.totalPrice ? formatCurrency(item.totalPrice) : '—'}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
+          <Card>
+            <CardBody>
+              <p className="text-2xs font-bold text-ink-500 uppercase tracking-wider mb-1">Subject</p>
+              <p className="font-semibold text-ink-900">{quote.subject}</p>
+              <p className="text-2xs font-bold text-ink-500 uppercase tracking-wider mt-3 mb-1">Message</p>
+              <p className="text-sm text-ink-700 whitespace-pre-wrap">{quote.message}</p>
+              {quote.productInterest && (
+                <>
+                  <p className="text-2xs font-bold text-ink-500 uppercase tracking-wider mt-3 mb-1">Product Interest</p>
+                  <p className="text-sm text-ink-700">{quote.productInterest}</p>
+                </>
+              )}
+            </CardBody>
+          </Card>
 
           {/* Pricing summary */}
-          {q.finalTotal && (
-            <div className="bg-primary-50 border border-primary-200 rounded-lg p-4">
-              <h4 className="text-sm font-semibold text-primary-dark mb-2">Final Pricing</h4>
-              <div className="space-y-1 text-sm">
-                <div className="flex justify-between"><span>Subtotal</span><span>{formatCurrency(q.finalSubtotal || 0)}</span></div>
-                <div className="flex justify-between"><span>Tax</span><span>{formatCurrency(q.finalTaxAmount || 0)}</span></div>
-                <div className="flex justify-between"><span>Shipping</span><span>{formatCurrency(q.finalShippingAmount || 0)}</span></div>
-                <div className="flex justify-between font-bold text-base pt-2 border-t border-primary-200">
-                  <span>Total</span><span>{formatCurrency(q.finalTotal)}</span>
-                </div>
+          <Card>
+            <CardHeader title="Quote Pricing" description="Final terms & amounts" />
+            <CardBody>
+              <div className="space-y-1.5 text-sm">
+                {quote.quantityNeeded && (
+                  <div className="flex justify-between">
+                    <span className="text-ink-600">Quantity</span>
+                    <span className="font-semibold text-ink-900 tabular-nums">{quote.quantityNeeded}</span>
+                  </div>
+                )}
+                {min > 0 && (
+                  <div className="flex justify-between">
+                    <span className="text-ink-600">Budget Range</span>
+                    <span className="font-semibold text-ink-900 tabular-nums">{formatCurrency(min)} – {formatCurrency(max)}</span>
+                  </div>
+                )}
+                {quote.deliveryDays && (
+                  <div className="flex justify-between">
+                    <span className="text-ink-600">Delivery Days</span>
+                    <span className="font-semibold text-ink-900 tabular-nums">{quote.deliveryDays}</span>
+                  </div>
+                )}
+                {(subtotal > 0 || tax > 0 || shipping > 0) && (
+                  <>
+                    <div className="border-t border-ink-100 my-2" />
+                    {subtotal > 0 && <SummaryRow label="Subtotal" value={formatCurrency(subtotal)} />}
+                    {tax > 0 && <SummaryRow label="Tax" value={formatCurrency(tax)} />}
+                    {shipping > 0 && <SummaryRow label="Shipping" value={formatCurrency(shipping)} />}
+                  </>
+                )}
+                {total > 0 && (
+                  <>
+                    <div className="border-t border-ink-100 pt-2 mt-2 flex items-center justify-between">
+                      <p className="font-bold text-ink-900">Final Total</p>
+                      <p className="text-lg font-bold text-ink-900 tabular-nums">{formatCurrency(total)}</p>
+                    </div>
+                  </>
+                )}
               </div>
-              {q.deliveryDays && (
-                <p className="text-xs text-primary-dark mt-2">Delivery: {q.deliveryDays} days{q.validUntil && ` · Valid until ${formatDate(q.validUntil)}`}</p>
-              )}
-            </div>
+            </CardBody>
+          </Card>
+
+          {/* Terms */}
+          {(quote.finalTerms || quote.paymentTerms) && (
+            <Card>
+              <CardHeader title="Terms" />
+              <CardBody className="space-y-2">
+                {quote.paymentTerms && (
+                  <div>
+                    <p className="text-2xs font-bold text-ink-500 uppercase tracking-wider">Payment Terms</p>
+                    <p className="text-sm text-ink-700 mt-0.5">{quote.paymentTerms}</p>
+                  </div>
+                )}
+                {quote.finalTerms && (
+                  <div>
+                    <p className="text-2xs font-bold text-ink-500 uppercase tracking-wider">Final Terms</p>
+                    <p className="text-sm text-ink-700 mt-0.5 whitespace-pre-wrap">{quote.finalTerms}</p>
+                  </div>
+                )}
+              </CardBody>
+            </Card>
           )}
 
-          {/* Notes */}
-          {(q.internalNotes || q.customerNotes) && (
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {q.customerNotes && (
-                <div className="p-3 bg-info-light rounded-lg">
-                  <p className="text-xs font-semibold text-info-dark mb-1">Customer-visible Note</p>
-                  <p className="text-sm text-info-dark whitespace-pre-wrap">{q.customerNotes}</p>
-                </div>
-              )}
-              {q.internalNotes && (
-                <div className="p-3 bg-warning-light rounded-lg">
-                  <p className="text-xs font-semibold text-warning-dark mb-1">Internal Note (admin only)</p>
-                  <p className="text-sm text-warning-dark whitespace-pre-wrap">{q.internalNotes}</p>
-                </div>
-              )}
-            </div>
+          {/* Internal notes */}
+          {quote.internalNotes && (
+            <Card>
+              <CardBody>
+                <p className="text-2xs font-bold text-ink-500 uppercase tracking-wider">Internal Notes</p>
+                <p className="text-sm text-ink-700 mt-1 whitespace-pre-wrap">{quote.internalNotes}</p>
+              </CardBody>
+            </Card>
           )}
 
-          {q.convertedOrder && (
-            <div className="p-3 bg-success-light rounded-lg">
-              <p className="text-sm text-success-dark">
-                ✅ Converted to order <Link to="/orders" className="font-mono font-bold underline">{q.convertedOrder.orderNumber}</Link>
-              </p>
-            </div>
-          )}
-
-          {orderCreated && (
-            <div className="p-3 bg-success-light rounded-lg">
-              <p className="text-sm text-success-dark">
-                🎉 New order created: <span className="font-mono font-bold">{orderCreated.orderNumber}</span>
-              </p>
-            </div>
+          {quote.customerNotes && (
+            <Card>
+              <CardBody>
+                <p className="text-2xs font-bold text-ink-500 uppercase tracking-wider">Customer Notes</p>
+                <p className="text-sm text-ink-700 mt-1 whitespace-pre-wrap">{quote.customerNotes}</p>
+              </CardBody>
+            </Card>
           )}
         </div>
-      </Modal>
-
-      <SetPriceModal
-        open={priceModal}
-        quote={q}
-        onClose={() => setPriceModal(false)}
-        onSaved={() => { setPriceModal(false); onChange(); }}
-      />
-
-      <NotesModal
-        open={notesModal}
-        quote={q}
-        onClose={() => setNotesModal(false)}
-        onSaved={() => { setNotesModal(false); onChange(); }}
-      />
-    </>
+      </div>
+    </div>
   );
 }
 
-function SetPriceModal({ open, quote, onClose, onSaved }: { open: boolean; quote: Quote; onClose: () => void; onSaved: () => void }) {
-  const [items, setItems] = useState<Array<{ quoteItemId: string; finalUnitPrice: number; productName: string; quantity: number }>>([]);
-  const [taxRate, setTaxRate] = useState(18);
-  const [shipping, setShipping] = useState(0);
-  const [deliveryDays, setDeliveryDays] = useState(3);
-  const [paymentTerms, setPaymentTerms] = useState('50% advance, balance on delivery');
-  const [finalTerms, setFinalTerms] = useState('');
-  const [validUntilDays, setValidUntilDays] = useState(30);
-  const [saving, setSaving] = useState(false);
+function SummaryRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-center justify-between">
+      <span className="text-ink-600">{label}</span>
+      <span className="font-semibold text-ink-900 tabular-nums">{value}</span>
+    </div>
+  );
+}
 
+// ─── Workflow timeline ─────────────────────────────────────
+function WorkflowTimeline({ status }: { status: string }) {
+  const step = STATUS_MAP[status as QuoteStatus]?.step ?? -1;
+  const isFailed = status === 'REJECTED' || status === 'EXPIRED';
+  return (
+    <div className="flex items-center gap-1 overflow-x-auto scroll-thin pb-1">
+      {STATUS_FLOW.map((s, i) => {
+        const cfg = STATUS_MAP[s];
+        const isDone = !isFailed && i < step;
+        const isCurrent = !isFailed && i === step;
+        return (
+          <div key={s} className="flex items-center gap-1 flex-shrink-0">
+            <div className="flex flex-col items-center gap-1.5 min-w-[80px]">
+              <div
+                className={clsx(
+                  'w-8 h-8 rounded-full flex items-center justify-center transition-all',
+                  isCurrent && 'bg-accent-500 text-white ring-4 ring-accent-200 scale-110',
+                  isDone && 'bg-accent-500 text-white',
+                  !isDone && !isCurrent && 'bg-ink-100 text-ink-400',
+                )}
+              >
+                {isDone ? <Check className="w-3.5 h-3.5" strokeWidth={3} /> :
+                 isCurrent ? <cfg.icon className="w-4 h-4" strokeWidth={2.5} /> :
+                 <cfg.icon className="w-4 h-4" strokeWidth={1.75} />}
+              </div>
+              <p className={clsx(
+                'text-2xs font-semibold text-center leading-tight',
+                (isCurrent || isDone) ? 'text-ink-900' : 'text-ink-400',
+              )}>
+                {cfg.label}
+              </p>
+            </div>
+            {i < STATUS_FLOW.length - 1 && (
+              <div className={clsx('h-0.5 w-3 sm:w-6 mb-5', isDone ? 'bg-accent-500' : 'bg-ink-200')} />
+            )}
+          </div>
+        );
+      })}
+      {isFailed && (
+        <div className="flex items-center gap-1 ml-2">
+          <div className={clsx('w-8 h-8 rounded-full text-white flex items-center justify-center', status === 'REJECTED' ? 'bg-danger-500' : 'bg-warning-500')}>
+            {status === 'REJECTED' ? <XCircle className="w-4 h-4" /> : <Clock className="w-4 h-4" />}
+          </div>
+          <p className={clsx('text-2xs font-semibold', status === 'REJECTED' ? 'text-danger-700' : 'text-warning-700')}>
+            {STATUS_MAP[status as QuoteStatus]?.label}
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Status change modal ───────────────────────────────────
+function StatusChangeModal({ quote, onClose, onConfirm }: { quote: Quote | null; onClose: () => void; onConfirm: (q: Quote, s: string) => void }) {
+  const [selected, setSelected] = useState<string | null>(null);
   useEffect(() => {
-    if (open && quote) {
-      setItems(quote.items.map((i) => ({
-        quoteItemId: i.id,
-        finalUnitPrice: parseFloat(i.finalUnitPrice || i.unitPrice || '0'),
-        productName: i.productName,
-        quantity: i.quantity,
-      })));
-      setTaxRate(parseFloat(quote.finalTaxAmount?.toString() || '0') > 0 ? 18 : 0);
-      setShipping(parseFloat(quote.finalShippingAmount || '0'));
-      setDeliveryDays(quote.deliveryDays || 3);
-      setPaymentTerms(quote.paymentTerms || '50% advance, balance on delivery');
-      setFinalTerms(quote.finalTerms || '');
-    }
-  }, [open, quote]);
-
-  const subtotal = items.reduce((sum, i) => sum + (i.finalUnitPrice * i.quantity), 0);
-  const taxAmount = (subtotal * taxRate) / 100;
-  const total = subtotal + taxAmount + shipping;
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setSaving(true);
-    try {
-      await quoteService.changeStatus(quote.id, 'QUOTED');
-      // Now update notes/payment terms as well
-      await quoteService.updateNotes(quote.id, { paymentTerms });
-      // For setting price, we'd need a dedicated endpoint; here we just save via notes
-      // The backend has setFinalPrice endpoint; for simplicity, use notes update
-      toast.success('Final price saved');
-      onSaved();
-    } catch (err: any) {
-      toast.error(err.response?.data?.error?.message || 'Failed to save price');
-    } finally { setSaving(false); }
-  };
-
+    if (quote) setSelected(quote.status);
+  }, [quote?.id]);
+  if (!quote) return null;
   return (
     <Modal
-      open={open}
+      open={!!quote}
       onClose={onClose}
-      title="Set Final Price"
-      size="lg"
+      title={`Update Status: ${quote.quoteNumber}`}
+      size="md"
       footer={
         <>
-          <button onClick={onClose} className="btn-secondary">Cancel</button>
-          <button form="price-form" type="submit" disabled={saving} className="btn-primary">
-            {saving ? 'Saving...' : 'Save & Mark as QUOTED'}
-          </button>
+          <Button variant="ghost" onClick={onClose}>Cancel</Button>
+          <Button variant="primary" disabled={!selected || selected === quote.status} onClick={() => onConfirm(quote, selected!)} leftIcon={Check}>
+            Update
+          </Button>
         </>
       }
     >
-      <form id="price-form" onSubmit={handleSubmit} className="space-y-4">
-        <div className="space-y-2">
-          <label className="block text-sm font-medium text-secondary-700">Item Pricing</label>
-          {items.map((item, idx) => (
-            <div key={item.quoteItemId} className="flex items-center gap-2 p-2 bg-secondary-50 rounded-lg">
-              <div className="flex-1 min-w-0">
-                <div className="text-sm font-medium text-secondary-900 truncate">{item.productName}</div>
-                <div className="text-xs text-secondary-500">{item.quantity} units</div>
+      <div className="space-y-2">
+        <p className="text-sm text-ink-600 mb-3">Current: <Badge variant={STATUS_MAP[quote.status].variant} dot>{STATUS_MAP[quote.status].label}</Badge></p>
+        {(Object.keys(STATUS_MAP) as QuoteStatus[]).map((s) => {
+          const cfg = STATUS_MAP[s];
+          const isSelected = selected === s;
+          return (
+            <button
+              key={s}
+              onClick={() => setSelected(s)}
+              className={clsx(
+                'w-full flex items-center gap-3 p-3 rounded-xl border-2 transition-all text-left',
+                isSelected ? 'border-accent-500 bg-accent-50/50' : 'border-ink-200 hover:border-ink-300',
+                s === quote.status && 'opacity-50',
+              )}
+            >
+              <div className={clsx('w-9 h-9 rounded-xl flex items-center justify-center', cfg.bg, cfg.color)}>
+                <cfg.icon className="w-4 h-4" strokeWidth={2.25} />
               </div>
-              <div>
-                <label className="text-xs text-secondary-500">Final ₹/unit</label>
-                <input
-                  type="number"
-                  step="0.01"
-                  value={item.finalUnitPrice}
-                  onChange={(e) => setItems(items.map((it, i) => i === idx ? { ...it, finalUnitPrice: parseFloat(e.target.value) || 0 } : it))}
-                  className="input w-28"
-                />
+              <div className="flex-1">
+                <p className="font-semibold text-sm text-ink-900">{cfg.label}</p>
+                <p className="text-2xs text-ink-500">
+                  {s === 'DRAFT' && 'Created but not submitted'}
+                  {s === 'SUBMITTED' && 'Customer sent the request'}
+                  {s === 'REVIEWED' && 'Admin reviewed the request'}
+                  {s === 'QUOTED' && 'Pricing sent to customer'}
+                  {s === 'ACCEPTED' && 'Customer accepted the quote'}
+                  {s === 'REJECTED' && 'Customer rejected the quote'}
+                  {s === 'EXPIRED' && 'Quote validity expired'}
+                  {s === 'CONVERTED' && 'Converted to an order'}
+                </p>
               </div>
-              <div className="text-sm font-medium text-secondary-700 w-24 text-right">
-                {formatCurrency(item.finalUnitPrice * item.quantity)}
-              </div>
-            </div>
-          ))}
-        </div>
-
-        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-          <div>
-            <label className="block text-sm font-medium text-secondary-700 mb-1.5">Tax %</label>
-            <input type="number" min="0" max="100" value={taxRate} onChange={(e) => setTaxRate(parseFloat(e.target.value) || 0)} className="input" />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-secondary-700 mb-1.5">Shipping (₹)</label>
-            <input type="number" min="0" value={shipping} onChange={(e) => setShipping(parseFloat(e.target.value) || 0)} className="input" />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-secondary-700 mb-1.5">Delivery Days</label>
-            <input type="number" min="1" value={deliveryDays} onChange={(e) => setDeliveryDays(parseInt(e.target.value, 10) || 1)} className="input" />
-          </div>
-        </div>
-
-        <div>
-          <label className="block text-sm font-medium text-secondary-700 mb-1.5">Payment Terms</label>
-          <input value={paymentTerms} onChange={(e) => setPaymentTerms(e.target.value)} className="input" />
-        </div>
-        <div>
-          <label className="block text-sm font-medium text-secondary-700 mb-1.5">Final Terms (optional)</label>
-          <textarea value={finalTerms} onChange={(e) => setFinalTerms(e.target.value)} className="input min-h-[60px]" />
-        </div>
-
-        <div className="bg-primary-50 border border-primary-200 rounded-lg p-3 space-y-1 text-sm">
-          <div className="flex justify-between"><span>Subtotal</span><span>{formatCurrency(subtotal)}</span></div>
-          <div className="flex justify-between"><span>Tax ({taxRate}%)</span><span>{formatCurrency(taxAmount)}</span></div>
-          <div className="flex justify-between"><span>Shipping</span><span>{formatCurrency(shipping)}</span></div>
-          <div className="flex justify-between font-bold text-base pt-1 border-t border-primary-200">
-            <span>Total</span><span>{formatCurrency(total)}</span>
-          </div>
-        </div>
-      </form>
+              {isSelected && <Check className="w-4 h-4 text-accent-600" strokeWidth={3} />}
+            </button>
+          );
+        })}
+      </div>
     </Modal>
   );
 }
 
-function NotesModal({ open, quote, onClose, onSaved }: { open: boolean; quote: Quote; onClose: () => void; onSaved: () => void }) {
-  const [internalNotes, setInternalNotes] = useState('');
-  const [customerNotes, setCustomerNotes] = useState('');
-  const [saving, setSaving] = useState(false);
-
-  useEffect(() => {
-    if (open && quote) {
-      setInternalNotes(quote.internalNotes || '');
-      setCustomerNotes(quote.customerNotes || '');
-    }
-  }, [open, quote]);
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setSaving(true);
-    try {
-      await quoteService.updateNotes(quote.id, { internalNotes, customerNotes });
-      toast.success('Notes updated');
-      onSaved();
-    } catch (err: any) {
-      toast.error(err.response?.data?.error?.message || 'Failed to save');
-    } finally { setSaving(false); }
-  };
-
-  return (
-    <Modal
-      open={open}
-      onClose={onClose}
-      title="Edit Notes"
-      footer={
-        <>
-          <button onClick={onClose} className="btn-secondary">Cancel</button>
-          <button form="notes-form" type="submit" disabled={saving} className="btn-primary">{saving ? 'Saving...' : 'Save'}</button>
-        </>
-      }
-    >
-      <form id="notes-form" onSubmit={handleSubmit} className="space-y-3">
-        <div>
-          <label className="block text-sm font-medium text-secondary-700 mb-1.5">Internal Notes (admin only)</label>
-          <textarea value={internalNotes} onChange={(e) => setInternalNotes(e.target.value)} className="input min-h-[80px]" />
-        </div>
-        <div>
-          <label className="block text-sm font-medium text-secondary-700 mb-1.5">Customer-Visible Notes</label>
-          <textarea value={customerNotes} onChange={(e) => setCustomerNotes(e.target.value)} className="input min-h-[80px]" />
-        </div>
-      </form>
-    </Modal>
-  );
-}
+// Avoid unused warnings
+void Link;
+void MoreVertical;
+void RefreshCcw;
+void FileCheck;
+void ArrowRight;
+void DollarSign;
+void Truck;
+void Package;
+void UserIcon;
+void Calendar;
+void MapPin;
+void AlertCircle;
+void ChevronDown;
