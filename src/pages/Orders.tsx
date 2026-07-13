@@ -708,6 +708,29 @@ function OrdersTimeline({ orders, onView }: any) {
 
 // ─── Order detail drawer (right slide-in) ───────────────────
 function OrderDetailDrawer({ order, onClose, onStatusChange, onPrint }: { order: Order | null; onClose: () => void; onStatusChange: (o: Order) => void; onPrint: (o: Order) => void }) {
+  const [downloading, setDownloading] = useState<string | null>(null);
+  const handleDownload = async (type: 'invoice' | 'delivery-note') => {
+    if (!order) return;
+    setDownloading(type);
+    try {
+      const API_BASE = (import.meta as any).env?.VITE_API_URL || 'https://asifbhai-production.up.railway.app/api/v1';
+      const token = localStorage.getItem('admin_token');
+      const url = `${API_BASE}/admin/orders/${order.id}/${type}.pdf`;
+      const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const blob = await res.blob();
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `${type === 'invoice' ? 'Invoice' : 'Delivery-Note'}-${order.orderNumber}.pdf`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+      toast.success(`${type === 'invoice' ? 'Invoice' : 'Delivery note'} downloaded`);
+    } catch (err: any) {
+      toast.error(`Failed to download: ${err.message}`);
+    } finally {
+      setDownloading(null);
+    }
+  };
   if (!order) return null;
   const status = STATUS_MAP[order.status];
   const payStatus = PAYMENT_STATUS_MAP[order.paymentStatus] || PAYMENT_STATUS_MAP.PENDING;
@@ -754,6 +777,8 @@ function OrderDetailDrawer({ order, onClose, onStatusChange, onPrint }: { order:
               Update Status
             </Button>
             <Button variant="secondary" size="sm" leftIcon={Printer} onClick={() => onPrint(order)}>Print Invoice</Button>
+            <Button variant="secondary" size="sm" leftIcon={Download} onClick={() => handleDownload('invoice')} disabled={downloading === 'invoice'}>Invoice PDF</Button>
+            <Button variant="secondary" size="sm" leftIcon={Truck} onClick={() => handleDownload('delivery-note')} disabled={downloading === 'delivery-note'}>Delivery Note</Button>
             <Button variant="secondary" size="sm" leftIcon={Copy}>Copy Details</Button>
             {order.status !== 'CANCELLED' && order.status !== 'DELIVERED' && (
               <Button variant="danger" size="sm" leftIcon={Ban}>Cancel</Button>
