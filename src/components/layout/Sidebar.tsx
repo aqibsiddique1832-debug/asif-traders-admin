@@ -51,8 +51,8 @@ const menuItems: MenuItem[] = [
       { to: '/quotes?status=REJECTED', label: 'Rejected' },
     ],
   },
-  { to: '/invoices', label: 'Invoices', icon: Receipt, group: 'sales', soon: true },
-  { to: '/shipping', label: 'Shipping', icon: Truck, group: 'sales', soon: true },
+  { to: '/invoices', label: 'Invoices', icon: Receipt, group: 'sales' },
+  { to: '/shipping', label: 'Shipping', icon: Truck, group: 'sales' },
 
   // ─── Catalog ────────────────────────────────────────
   {
@@ -64,16 +64,16 @@ const menuItems: MenuItem[] = [
     ],
   },
   { to: '/categories', label: 'Categories', icon: FolderTree, group: 'catalog' },
-  { to: '/brands', label: 'Brands', icon: Tags, group: 'catalog', soon: true },
+  { to: '/brands', label: 'Brands', icon: Tags, group: 'catalog' },
   { to: '/inventory', label: 'Inventory', icon: Warehouse, group: 'catalog' },
   { to: '/pincodes', label: 'Delivery Pincodes', icon: MapPin, group: 'catalog' },
 
   // ─── Engage ─────────────────────────────────────────
   { to: '/customers', label: 'Customers', icon: Users, group: 'engage' },
-  { to: '/reviews', label: 'Reviews', icon: Star, group: 'engage', soon: true },
-  { to: '/marketing', label: 'Marketing', icon: Megaphone, group: 'engage', soon: true },
-  { to: '/coupons', label: 'Coupons', icon: Percent, group: 'engage', soon: true },
-  { to: '/media', label: 'Media Library', icon: ImageIcon, group: 'engage', soon: true },
+  { to: '/reviews', label: 'Reviews', icon: Star, group: 'engage' },
+  { to: '/marketing', label: 'Marketing', icon: Megaphone, group: 'engage' },
+  { to: '/coupons', label: 'Coupons', icon: Percent, group: 'engage' },
+  { to: '/media', label: 'Media Library', icon: ImageIcon, group: 'engage' },
 
   // ─── System ─────────────────────────────────────────
   { to: '/analytics', label: 'Analytics', icon: BarChart3, group: 'system' },

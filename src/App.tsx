@@ -27,6 +27,9 @@ import Pincodes from './pages/Pincodes';
 import Settings from './pages/Settings';
 import Users from './pages/Users';
 import RolesPermissions from './pages/RolesPermissions';
+import Invoices from './pages/Invoices';
+import Shipping from './pages/Shipping';
+import Coupons from './pages/Coupons';
 import { NotFoundPage, ServerErrorPage, NetworkErrorPage, SessionExpiredPage, PermissionDeniedPage } from './pages/ErrorPages';
 
 function App() {
@@ -71,6 +74,9 @@ function App() {
             <Route path="settings" element={<Settings />} />
             <Route path="users" element={<Users />} />
             <Route path="roles" element={<RolesPermissions />} />
+            <Route path="invoices" element={<Invoices />} />
+            <Route path="shipping" element={<Shipping />} />
+            <Route path="coupons" element={<Coupons />} />
             <Route path="*" element={<NotFoundPage />} />
           </Route>
         </Routes>
